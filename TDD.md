@@ -6,6 +6,18 @@ Grounded in the Obsidian Plugin API and known platform gotchas (see `resources/`
 
 ---
 
+## 0. What This Is
+
+An Obsidian plugin is a client-side JavaScript bundle running inside Obsidian's Electron app (Chromium + Node.js, single process). There is no server, no backend, no cloud infrastructure. The plugin is a `.js` file loaded into the user's Obsidian instance on their machine.
+
+Everything runs on the main thread — the plugin shares it with Obsidian's editor, renderer, and all other plugins. Web Workers are unreliable in Obsidian. The only thing that leaves the user's machine is `requestUrl()` calls to OpenAI for embedding generation and LLM inference. All other computation (similarity search, scope filtering, callout parsing) runs locally on the user's CPU.
+
+Data is stored locally in the vault's `.obsidian/plugins/second-thoughts/` directory. There is no deployment — users install the plugin and it runs in their Obsidian.
+
+**Architecture:** local single-threaded client → external API calls → local file storage.
+
+---
+
 ## 1. Plugin Skeleton
 
 ### 1.1 Build
