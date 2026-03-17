@@ -22,6 +22,8 @@ Neither system is a chat experience. Both produce standalone callouts — artifa
 
 The *knowledge* used to generate proposals comes exclusively from the user's vault. No web searches, no external datasets, no pre-trained knowledge influences the content of proposals. However, *processing* — specifically embedding generation and LLM inference — uses an external service. Vault content is sent to this service for the purpose of generating vector representations and proposals, but the substance of every proposal is drawn entirely from the user's own notes.
 
+**Data transmitted:** For each processed note, the plugin sends four pieces of data to the external API: the note's title, its tags, its wikilinks, and its body content. This happens once per note on first index, and again whenever a note changes. The plugin's README and settings tab must clearly disclose what data is sent, to which service, and how often.
+
 ### 2.5 Invisible Infrastructure
 
 The user has no awareness of the semantic index, the retrieval pipeline, or the internal state of the plugin. There is no status bar, no progress indicator, no coverage percentage. The plugin either produces proposals or it doesn't. The user's only interface is the callouts themselves — accept or reject.

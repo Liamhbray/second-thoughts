@@ -35,12 +35,15 @@ onload()
   ├─ loadSettings()
   ├─ addSettingTab(), addCommand(), registerEvent()
   └─ workspace.onLayoutReady()
-       ├─ Wait for metadataCache 'resolved'
+       ├─ Wait for metadataCache 'resolved' (unregister after first fire)
        ├─ Load shadow files into runtime map
        └─ Queue stale/missing notes for re-embedding
 
 onunload()
-  └─ Automatic cleanup (all register*() resources)
+  ├─ Automatic cleanup (all register*() resources)
+  ├─ Clear all pending idle debounce timers
+  ├─ Abort in-flight API requests (via AbortController)
+  └─ Release runtime embedding map
 ```
 
 **Gotchas:**
@@ -59,7 +62,7 @@ No built-in idle event. Built from three primitives:
 | Active file changed | `workspace.on('file-open')` | Track focused file |
 | Active leaf changed | `workspace.on('active-leaf-change')` | Track pane focus |
 
-Per-file debounce timer in a `Map<string, timeout>`. On modify: reset timer. When timer fires: check file is not active → idle. Before writing any callout: re-verify both conditions (user may have resumed editing during processing).
+Per-file debounce timer in a `Map<string, timeout>`. On modify: reset timer. When timer fires: check file is not active → idle. On idle: wait for `metadataCache.on('changed')` for this file (ensures metadata is fresh) before extracting compartments and re-embedding. Before writing any callout: re-verify both idle conditions inside the `vault.process()` callback (user may have resumed editing during processing).
 
 All events via `registerEvent()`. Filter to `TFile` with `.md` extension.
 
@@ -80,13 +83,15 @@ Four embeddings per note:
 | Title | `TFile.basename` | Direct |
 | Tags | `cache.tags` + `cache.frontmatter.tags` | `metadataCache.getFileCache()` |
 | Links | `cache.links` + `cache.frontmatterLinks` | `metadataCache.getFileCache()` |
-| Content | Note body | `vault.cachedRead()` |
+| Content | Note body | `vault.read()` |
 
 **Rationale:** Single embeddings blend structural signals with content and content dominates. Compartmentalisation preserves each signal layer independently.
 
 **Pre-processing:** Strip internal links (`[[#heading]]`, `[[#^block]]`) from Links compartment. Exclude source note from searches.
 
-**Cache timing:** `getFileCache()` returns `null` after file creation/modification until the `metadataCache.on('changed')` event fires. Wait for it.
+**Content extraction:** Use `vault.read()` (not `cachedRead()`) for the Content compartment — `cachedRead()` is documented as "suitable for display purposes" and may return stale content. For embeddings, accuracy matters.
+
+**Cache timing:** `getFileCache()` returns `null` after file creation/modification until the `metadataCache.on('changed')` event fires. After idle is detected, wait for the `'changed'` event for that specific file before extracting Tags and Links compartments. This ensures embeddings capture current metadata, not stale data.
 
 ### 3.3 Index Storage
 
@@ -106,7 +111,8 @@ Each shadow file contains all four compartment embeddings and the note's `mtime`
   "title": [0.012, -0.034, ...],
   "tags": [0.056, 0.011, ...],
   "links": [-0.023, 0.045, ...],
-  "content": [0.067, -0.012, ...]
+  "content": [0.067, -0.012, ...],
+  "proposed": ["path/to/target-a.md"]
 }
 ```
 
@@ -158,9 +164,9 @@ On consecutive API failures (5+), pause requests for 60 seconds to avoid cascadi
 
 ### Writing
 
-Idle notes are not in the active editor. Use `vault.append(file, calloutText)`.
+Always use `vault.process()` for callout writes — it is atomic (read-modify-write in one synchronous callback), preventing race conditions where the file changes between read and write. `vault.append()` and `vault.modify()` are both vulnerable to this race. Never use `vault.modify()` — it also conflicts with the editor's `requestSave` debounce (~2s window).
 
-Final idle check before writing — if user resumed editing, abort. If file is somehow open in editor, use `vault.process()` (synchronous callback, atomic). Never `vault.modify()` — it races with the editor's `requestSave` debounce.
+The final idle check happens inside the `vault.process()` callback: read the content, verify the note hasn't gained new edits (compare against expected state), then return the modified content with the callout appended. If the check fails, return the content unchanged (no-op).
 
 ### Format
 
@@ -185,7 +191,7 @@ Three commands via `addCommand()` with `editorCheckCallback`:
 
 Single-threaded (Web Workers unreliable in Obsidian). Process in batches of 50 with `setTimeout(resolve, 0)` yields between batches. Use `requestIdleCallback()` for non-urgent work.
 
-**Startup:** After `onLayoutReady()` + `metadataCache 'resolved'` → load shadow files into runtime map → diff `mtime` against vault → queue stale/missing notes → process in priority order (recently modified first).
+**Startup:** After `onLayoutReady()` + `metadataCache 'resolved'` (unregister after first fire — it fires multiple times, not just at startup) → load shadow files into runtime map → diff `mtime` against vault → queue stale/missing notes → process in priority order (recently modified first).
 
 **Bootstrap threshold:** System 1 is suppressed until 100% of vault notes have been indexed. On a fresh install, the full vault must be embedded before System 1 begins proposing connections — partial coverage would produce low-quality results since the system can't know what it's missing. System 2 runs at any coverage level (per SDD Section 6.1), since the user is explicitly asking a question and a partial answer is better than none.
 
@@ -213,7 +219,22 @@ Settings match the SDD Section 8 table: API key, idle debounce, hop depth, scope
 
 ## 9. Proposal Deduplication
 
-Per-note map of proposed target paths, stored in `data.json`. For each source note, track which target notes have been proposed. Clear the source note's entries when the source note is re-embedded (i.e., when it changes). This means: same note, same content → same proposals are suppressed. Note changes → all proposals eligible again.
+Track proposed connections inside each note's shadow file by adding a `proposed` field alongside the embeddings:
+
+```json
+{
+  "mtime": 1710648000000,
+  "title": [0.012, -0.034, ...],
+  "tags": [...],
+  "links": [...],
+  "content": [...],
+  "proposed": ["path/to/target-a.md", "path/to/target-b.md"]
+}
+```
+
+Before generating a proposal, check if the source→target pair is already in the `proposed` list. The list is cleared whenever the note is re-embedded (i.e., when the note changes and `mtime` updates). This means: same note, same content → same proposals are suppressed. Note changes → all proposals eligible again.
+
+This avoids storing per-note data in `data.json` (which must stay under 1MB) and co-locates dedup tracking with the embeddings it relates to.
 
 Separate from rejection tracking — the SDD specifies that rejected proposals may recur. This tracker only prevents re-proposing identical connections while the source note hasn't changed.
 

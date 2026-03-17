@@ -34,12 +34,12 @@ vault.on('modify') fires for note
   → IDLE
 
 idle triggers processing:
-  1. Re-embed: extract 4 compartments, call OpenAI embeddings, save shadow file
-  2. Scope: BFS on resolvedLinks + folder/tag filters → candidate set
-  3. Similarity: cosine search across 4 compartments → 4 top-K result sets
-  4. Generate: pass result sets + full note content to LLM → [!connection] callout
-  5. Final idle check — abort if user returned
-  6. vault.append(file, callout)
+  1. Wait for metadataCache 'changed' for this file (ensures fresh metadata)
+  2. Re-embed: extract 4 compartments (vault.read for content), call OpenAI embeddings, save shadow file
+  3. Scope: BFS on resolvedLinks + folder/tag filters → candidate set
+  4. Similarity: cosine search across 4 compartments → 4 top-K result sets
+  5. Generate: pass result sets + full note content to LLM → [!connection] callout
+  6. vault.process(file, data => data + callout) — final idle re-check inside callback
 ```
 
 ### Flow B: User tags @agent → System 2 response
@@ -52,12 +52,12 @@ vault.on('modify') fires for note
   → IDLE
 
 idle triggers processing:
-  1. Scan note content for @agent tag (with optional scope modifiers)
-  2. If no tag → skip System 2
-  3. Re-embed note (same as Flow A step 1)
-  4. Scope + Similarity + Generate (same pipeline, different prompt + callout type)
-  5. Final idle check
-  6. vault.append(file, callout)
+  1. Wait for metadataCache 'changed' for this file
+  2. Scan note content for @agent tag (with optional scope modifiers)
+  3. If no tag → skip System 2
+  4. Re-embed note (same as Flow A step 2)
+  5. Scope + Similarity + Generate (same pipeline, different prompt + callout type)
+  6. vault.process(file, data => data + callout) — final idle re-check inside callback
 ```
 
 ### Flow C: Startup / Bootstrap
@@ -66,7 +66,7 @@ idle triggers processing:
 onload()
   → register settings, commands, events (fast)
   → onLayoutReady()
-       → wait for metadataCache 'resolved'
+       → wait for metadataCache 'resolved' (unregister after first fire)
        → list all .md files in vault
        → for each: check if shadow file exists and mtime matches
        → queue stale/missing notes for embedding
@@ -95,7 +95,7 @@ Start with two files. Split later if needed.
 - Idle tracking (timer map, focus tracking)
 - Embedding index (shadow file read/write, runtime map)
 - Retrieval pipeline (scope filters, similarity, LLM call)
-- Callout writing (append, accept, reject)
+- Callout writing (vault.process, accept, reject)
 - @agent tag scanning
 
 **`settings.ts`** — settings tab:
@@ -164,8 +164,8 @@ Sequential phases. Each phase is testable independently before moving on.
 - Scope pre-filters (hop depth BFS, folder, tag, exclusions)
 - Cosine similarity across 4 compartments → 4 top-K sets
 - LLM prompt assembly and API call
-- Callout append via vault.append()
-- Final idle check before write
+- Callout write via vault.process() (atomic, with idle re-check inside callback)
+
 - **Test:** Note goes idle → [!connection] callout appears with contextual wikilink
 
 ### Phase 6 — System 2
@@ -183,10 +183,12 @@ Sequential phases. Each phase is testable independently before moving on.
 
 ### Phase 8 — Hardening
 - API failure pause (5 consecutive failures → 60s pause, per TDD Section 4)
-- Error handling in all event handlers
-- Deduplication tracker
-- Settings validation
+- Error handling in all event handlers (try-catch, never crash Obsidian)
+- Deduplication tracker (proposed targets in shadow files, per TDD Section 9)
+- Settings validation (merge with defaults, handle corrupt data.json)
+- onunload() cleanup: clear timers, abort in-flight requests, release runtime map
 - Community compliance audit (no fetch, no innerHTML, proper cleanup)
+- Data privacy disclosure in README and settings tab
 
 ---
 
