@@ -8,7 +8,9 @@ An Obsidian community plugin (TypeScript) that augments notes with AI-generated 
 
 ## Key Files
 
-- `SDD.md` — Software Design Document. The authoritative spec for what we're building.
+- `SDD.md` — Software Design Document. The authoritative spec for behaviour and constraints.
+- `TDD.md` — Technical Design Document. Implementation architecture (vendor choices, embeddings, pipeline, bootstrapping).
+- `PLAN.md` — Implementation Plan. Control flow, module boundaries, build order, and phasing.
 - `resources/INDEX.md` — Master index for the offline Obsidian plugin development reference library.
 - `resources/api-reference.md` — Obsidian Plugin API (Vault, MetadataCache, Workspace, Editor, UI).
 - `resources/best-practices.md` — Official guidelines and recommended patterns.

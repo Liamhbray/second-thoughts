@@ -20,7 +20,7 @@ Neither system is a chat experience. Both produce standalone callouts — artifa
 
 ### 2.4 Vault-Sourced, Not Vault-Contained
 
-The *knowledge* used to generate proposals comes exclusively from the user's vault. No web searches, no external datasets, no pre-trained knowledge influences the content of proposals. However, *processing* — specifically embedding generation and LLM inference — uses an external service (OpenAI). Vault content is sent to OpenAI for the purpose of generating vector representations and proposals, but the substance of every proposal is drawn entirely from the user's own notes.
+The *knowledge* used to generate proposals comes exclusively from the user's vault. No web searches, no external datasets, no pre-trained knowledge influences the content of proposals. However, *processing* — specifically embedding generation and LLM inference — uses an external service. Vault content is sent to this service for the purpose of generating vector representations and proposals, but the substance of every proposal is drawn entirely from the user's own notes.
 
 ### 2.5 Invisible Infrastructure
 
@@ -42,8 +42,10 @@ The user has no awareness of the semantic index, the retrieval pipeline, or the 
 **Example:**
 
 ```markdown
+
 > [!connection]
 > This concept of "feedback loops" connects to your note on [[Systems Thinking]] — both describe how outputs cycle back as inputs to reinforce or dampen behaviour. The framing here is biological; your Systems Thinking note approaches it from an engineering perspective.
+
 ```
 
 **What it is not:** It is not a link suggester that dumps a list of related files. Every proposal must explain *why* the connection matters in the context of what the user wrote.
@@ -70,7 +72,7 @@ How does my reading on stoicism connect to the resilience framework I drafted la
 ### 3.3 What the Two Systems Share
 
 - **Semantic index:** Both systems query the same shared index to retrieve relevant notes (see Section 5).
-- **Retrieval pipeline:** Both use the same scope → similarity → top-K → generate pipeline (see Section 5.2).
+- **Retrieval pipeline:** Both use the same scope → similarity → top-K → generate pipeline (see Section 5.2 and `TDD.md` Section 4).
 - **Delivery format:** Both produce Obsidian callouts (different types) that can be individually accepted or rejected.
 - **Recency rules:** Neither system will write to a note that is actively being edited or viewed. Both wait for idle.
 - **Additive only:** Neither system deletes or rewrites human content. They only append callouts.
@@ -90,7 +92,7 @@ How does my reading on stoicism connect to the resilience framework I drafted la
 Both systems depend on knowing when a note is no longer being actively worked on. A note is considered idle when:
 
 1. It has not been modified within a configurable debounce window (default: 5 minutes).
-2. It is not the currently focused file in the workspace.
+2. It is not the file in the currently active editor pane.
 
 Both conditions must be true. The debounce window is user-configurable.
 
@@ -107,65 +109,15 @@ The semantic index is the shared foundation that both systems depend on. It enab
 
 ### 5.1 Design Decisions
 
-- **Unit of knowledge:** A note. Each note is represented by four embeddings — one per compartment (see 5.2).
-- **Embedding service:** OpenAI Embeddings API. External service, not local compute.
-- **Freshness:** Always re-embed on change. When a note is modified and goes idle, all four compartment embeddings are regenerated before either system processes it. The index is never stale.
-- **Feedback:** The index does not learn from user rejections. Rejections are destructive — the callout is deleted. The system is stateless with respect to user feedback. The same connection could be proposed again on a future idle cycle.
+- **Unit of knowledge:** A note. Each note is represented by multiple embeddings that capture distinct semantic signals (see `TDD.md` Section 3.2 for the embedding strategy).
+- **Embedding service:** External service, not local compute (see `TDD.md` Section 3.1 for vendor choice).
+- **Freshness:** Always re-embed on change. When a note is modified and goes idle, its embeddings are regenerated before either system processes it. The index is never stale.
+- **Feedback:** The index does not learn from user rejections. Rejections are destructive — the callout is deleted. The system is stateless with respect to rejections. The same connection could be proposed again on a future idle cycle.
 - **Visibility:** None. The user cannot observe the index, its state, its coverage, or its existence.
 
-### 5.2 Compartmentalised Embeddings
+### 5.2 Retrieval
 
-Rather than embedding raw note content as a flat string, each note is decomposed into four compartments. Each compartment is embedded independently, producing four vectors per note.
-
-| Compartment | Input | What it captures |
-| --- | --- | --- |
-| Title | The note's filename/title | The user's most compressed expression of what the note is about |
-| Tags | All `#tags` on the note | How the user categorises and classifies the note |
-| Links | All `[[wikilinks]]` in the note | What the user has explicitly connected this note to |
-| Content | The note body text | The semantic meaning of what the user wrote |
-
-**Why compartmentalise:** A single embedding of the entire note blends structural signals (tags, links) with content, and the content dominates. Compartmentalisation preserves each layer's signal. Two notes might have very different content but near-identical tag and link patterns — that structural similarity is meaningful and would be lost in a blended embedding.
-
-**Cost:** Four API calls per note instead of one. For a vault of 500 notes, bootstrapping requires ~2,000 embedding calls. Incremental updates on note change require 4 calls per modified note. This is a marginal cost increase for a significant retrieval quality improvement.
-
-### 5.3 Retrieval Pipeline
-
-Both systems use the same pipeline to go from a source note (or `@agent` prompt) to a set of relevant context notes. This pipeline is what makes the plugin viable regardless of vault size.
-
-```text
-1. Scope pre-filters
-   Narrow the candidate pool using structural constraints:
-   hop depth, folder boundaries, tag filters.
-   (Cheap — uses Obsidian's MetadataCache, no API calls.)
-
-2. Four parallel similarity searches
-   For each compartment (title, tags, links, content),
-   compare the source note's compartment embedding against
-   the same compartment of all remaining candidates.
-   Each search returns its own top-K results.
-   (Cheap — vector math, no API calls.)
-
-3. Four result sets passed to LLM
-   The four result sets are not merged or ranked.
-   They are passed independently to the LLM:
-   - "These notes matched on title similarity"
-   - "These notes matched on tag patterns"
-   - "These notes matched on link structure"
-   - "These notes matched on content"
-   A note may appear in multiple result sets.
-   (Cheap — assembly only.)
-
-4. LLM reasoning and generation
-   The LLM receives all four result sets with the full
-   content of each retrieved note. It reasons across the
-   compartments — a note appearing in three result sets
-   is likely more relevant than one appearing in only one.
-   The LLM decides what's meaningful and generates the
-   proposal.
-   (This is where tokens are spent.)
-```
-
-Token cost is proportional to K × 4 compartments (before deduplication), not vault size. The LLM does the synthesis — no scoring formula or blending weights.
+Both systems use the same retrieval approach: scope the candidate pool first, then find semantically similar notes, then pass the results to an LLM for reasoning and generation. This ensures cost scales with the retrieval window, not vault size. See `TDD.md` Section 4 for the pipeline architecture.
 
 ### 5.4 Why Scoping Is Required
 
@@ -192,44 +144,30 @@ Scope pre-filters (stage 1 of the pipeline) are what make the system practical a
 
 ### 5.7 Scope Controls
 
-- Global defaults in plugin settings.
-- Per-note overrides via frontmatter.
-- Per-folder overrides via folder-level configuration.
-- Inline scope modifiers on `@agent` tags (e.g., `@agent scope:folder`, `@agent hops:3`).
+- Global defaults in plugin settings (v1).
+- Per-note overrides via frontmatter (deferred).
+- Per-folder overrides via folder-level configuration (deferred).
+- Inline scope modifiers on `@agent` tags (e.g., `@agent scope:folder`, `@agent hops:3`) (deferred).
 
 ## 6. Bootstrapping
 
-On first install, the semantic index is empty. The plugin must build it before proposals can be generated. This process is invisible to the user.
+On first install, the semantic index is empty. The plugin must build it before proposals can be generated. This process is invisible to the user. See `TDD.md` Section 6 for the index construction strategy (processing order, throttling, persistence, bootstrap threshold).
 
-### 6.1 What Obsidian Already Provides
+### 6.1 Behaviour During Bootstrapping
 
-Obsidian's MetadataCache parses every note on startup and maintains a structural graph — links, tags, headings, frontmatter, backlinks. This is available immediately and requires no plugin bootstrapping. The plugin builds on this, not beside it. The structural graph powers the scope pre-filters (stage 1 of the retrieval pipeline).
-
-### 6.2 Building the Semantic Index
-
-The plugin generates an embedding for every note in the vault via the OpenAI Embeddings API. This happens silently in the background.
-
-**Processing order:** Recently modified notes first (most likely relevant), then most-linked notes (highest structural connectivity), then the rest.
-
-**Throttling:** API calls are rate-limited and batched to avoid hitting OpenAI rate limits and to keep costs predictable.
-
-**Persistence:** The index is saved to disk so it survives restarts. On subsequent launches, only new or modified files need re-embedding.
-
-### 6.3 Behaviour During Bootstrapping
-
-- **System 1:** Suppressed until indexing reaches an internal threshold. The user experiences this as "the plugin hasn't suggested anything yet" — which is unremarkable, because they never asked it to.
+- **System 1:** Suppressed until the entire vault has been indexed. The user experiences this as "the plugin hasn't suggested anything yet" — which is unremarkable, because they never asked it to.
 - **System 2:** Allowed at any coverage level. If the user tags `@agent` before the vault is fully indexed, the system responds with whatever context is available. It does not communicate the limitation — the response is simply based on what has been indexed so far.
 
 ## 7. Callout Structure
 
-Both systems deliver proposals using Obsidian's built-in callout rendering. No custom post-processors — the plugin defines two callout types and Obsidian handles display in both edit and reading mode.
+Both systems deliver proposals using Obsidian's built-in callout rendering. See `TDD.md` Section 5 for rendering approach.
 
 Each callout:
 
 - Uses a system-specific type: `[!connection]` (System 1) or `[!ideation]` (System 2).
 - Is visually distinct in both edit and reading mode via Obsidian's native callout styling.
 - Can be individually accepted or rejected via plugin commands (not inline UI buttons).
-- **Acceptance:** The callout markers are removed. The content becomes part of the note — indistinguishable from human-written text. The note is re-embedded on the next idle cycle, and the new content (including any links) is reflected in all four compartment embeddings going forward.
+- **Acceptance:** The callout markers are removed. The content becomes part of the note — indistinguishable from human-written text. The note is re-embedded on the next idle cycle.
 - **Rejection:** The entire callout is deleted permanently. The system does not track rejections and may propose the same connection again in the future.
 - Can be batch-managed via plugin commands (e.g., "reject all pending proposals").
 
@@ -237,11 +175,11 @@ Each callout:
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| OpenAI API key | — | Required. Used for embedding generation and LLM calls |
+| API key | — | Required. Used for embedding generation and LLM calls |
 | Idle debounce (minutes) | 5 | Time since last edit before a note is eligible |
 | System 1 scope — hop depth | 3 | Default link-hop boundary for relational proposals |
 | System 2 scope — default | `folder` | Default context boundary for `@agent` responses |
-| Top-K per compartment | 5 | Maximum notes retrieved per compartment search (up to 20 total before deduplication) |
+| Top-K per compartment | 5 | Maximum notes retrieved per similarity search (up to 20 total before deduplication) |
 | Excluded folders | `[]` | Folders exempt from all processing |
 | Excluded tags | `[]` | Notes with these tags are exempt |
 | Agent tag | `@agent` | The marker that triggers System 2 |
@@ -249,15 +187,15 @@ Each callout:
 ## 9. Constraints
 
 - The knowledge used in proposals comes exclusively from the user's vault. No external datasets, web searches, or pre-trained knowledge influences proposal content.
-- Vault content is sent to the OpenAI API for embedding generation and LLM inference. Users must provide their own API key and accept this data flow.
+- Vault content is sent to an external API for embedding generation and LLM inference. Users must provide their own API key and accept this data flow.
 - Neither system modifies a note while it is actively focused or being edited.
 - All proposals are additive — neither system deletes or rewrites human content.
 - The user can disable processing for specific notes (via frontmatter) or folders (via settings).
 - Scoping is always enforced. Both systems are bounded by the retrieval pipeline — no unbounded vault traversal.
-- A note cannot propose connections to itself. The source note is excluded from all four compartment searches. Internal links (`[[#heading]]`, `[[#^block]]`) are stripped from the Links compartment before embedding.
+- A note cannot propose connections to itself. The source note is excluded from all retrieval searches.
 - The semantic index is invisible. No internal state is exposed to the user through any UI element.
 - Desktop only. Mobile is not supported in this version.
 
 ## 10. Open Questions
 
-- **Proposal deduplication:** If a note becomes idle multiple times, System 1 must avoid proposing the same connection twice. The system is stateless with respect to rejections (rejected proposals may recur), but it should not propose identical connections on consecutive idle cycles. Needs a processed-state tracker that is separate from rejection tracking.
+- **Proposal deduplication:** If a note becomes idle multiple times, System 1 must avoid proposing the same connection twice. The system is stateless with respect to rejections (rejected proposals may recur), but it should not re-propose a connection to the same target note while the source note remains unchanged. See `TDD.md` Section 9 for implementation approach.
