@@ -23,7 +23,7 @@ Data is stored locally in the vault's `.obsidian/plugins/second-thoughts/` direc
 ### 1.1 Build
 
 - esbuild, `src/main.ts` → `main.js`, CommonJS, target `es2018`
-- Externals: `obsidian`, `electron`, `@codemirror/*`, `@lezer/*`
+- Externals: `obsidian`, `electron`, `@codemirror/view`, `@codemirror/state`, `@codemirror/*`, `@lezer/*` — **never bundle CM6 packages**; Obsidian provides its own instance. Bundling duplicates causes silent `instanceof` failures.
 - Use Obsidian builtins: `requestUrl()` (not `fetch`), `sanitizeHTMLToDom()` (not `innerHTML`), `moment` from `obsidian`
 
 ### 1.2 Manifest
@@ -46,6 +46,7 @@ Data is stored locally in the vault's `.obsidian/plugins/second-thoughts/` direc
 onload()
   ├─ loadSettings()
   ├─ addSettingTab(), addCommand(), registerEvent()
+  ├─ registerEditorExtension() — CM6 callout decorations (accept/reject buttons)
   └─ workspace.onLayoutReady()
        ├─ Wait for metadataCache 'resolved' (unregister after first fire)
        ├─ Load shadow files into runtime map
@@ -189,9 +190,24 @@ The final idle check happens inside the `vault.process()` callback: read the con
 
 ```
 
-### Accept / Reject
+### Inline Accept / Reject (CM6 Decorations)
 
-Three commands via `addCommand()` with `editorCheckCallback`:
+Each `[!connection]` and `[!ideation]` callout gets inline accept/reject buttons rendered via CodeMirror 6 editor decorations. This is the primary interaction — the user sees buttons directly on the callout without needing the command palette.
+
+**Approach:** Register a `StateField` via `registerEditorExtension()` in `onload()`.
+
+- The field scans the document for `> [!connection]` and `> [!ideation]` patterns.
+- At each callout, it places a **widget decoration** containing accept and reject buttons.
+- Decorations persist across edits via `DecorationSet.map(tr.changes)` — CM6 automatically remaps positions when the document changes.
+- Button clicks trigger `vault.process()` to perform the accept/reject, then dispatch a `StateEffect` to remove the decoration.
+
+**Why StateField, not ViewPlugin:** Callouts can be anywhere in the document (not just the visible viewport). StateField processes the full document and supports block decorations. ViewPlugin is viewport-only and cannot produce block-level widgets.
+
+**Critical:** Import `@codemirror/view` and `@codemirror/state` from Obsidian's own packages (marked external in esbuild). Never bundle your own — duplicate CM6 instances cause silent failures.
+
+### Command Palette Fallback
+
+Three commands remain via `addCommand()` with `editorCheckCallback` as a keyboard-accessible fallback:
 
 - **Accept:** `vault.process()` — strip callout markers, keep content as plain text.
 - **Reject:** `vault.process()` — delete entire callout block.

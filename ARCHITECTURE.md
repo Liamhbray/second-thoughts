@@ -40,8 +40,13 @@ graph TB
 
         subgraph CalloutWriter["Callout Writer"]
             WriteCallout["vault.process()<br/>(atomic, with idle re-check inside callback)"]
-            AcceptCmd["Accept Command<br/>strip callout markers"]
-            RejectCmd["Reject Command<br/>delete callout block"]
+        end
+
+        subgraph CM6["CM6 Editor Extension"]
+            StateField["StateField<br/>scans for [!connection] / [!ideation]"]
+            WidgetDeco["Widget Decorations<br/>accept / reject buttons per callout"]
+            AcceptBtn["Accept → vault.process()<br/>strip markers, keep content"]
+            RejectBtn["Reject → vault.process()<br/>delete callout block"]
         end
 
         Settings[("Settings<br/>data.json<br/>API key · debounce · scope · exclusions")]
@@ -82,8 +87,12 @@ graph TB
 
     %% Write flow
     WriteCallout --> Notes
-    AcceptCmd -->|"vault.process()"| Notes
-    RejectCmd -->|"vault.process()"| Notes
+    Notes -->|"callout in document"| StateField
+    StateField --> WidgetDeco
+    WidgetDeco -->|"user clicks"| AcceptBtn
+    WidgetDeco -->|"user clicks"| RejectBtn
+    AcceptBtn -->|"vault.process()"| Notes
+    RejectBtn -->|"vault.process()"| Notes
     Notes -->|"modified → re-enters idle pipeline"| VaultEvents
 
     %% Settings
@@ -97,7 +106,7 @@ graph TB
     classDef storage fill:#065f46,stroke:#064e3b,color:#fff
 
     class VaultEvents,MetadataCache,Editor,Notes obsidian
-    class OnLoad,OnLayoutReady,ResolvedEvent,OnUnload,TimerMap,FocusTracker,IdleCheck,Extractor,RuntimeMap,ScopeFilters,Similarity,ContextAssembly,Generation,WriteCallout,AcceptCmd,RejectCmd,FailurePause plugin
+    class OnLoad,OnLayoutReady,ResolvedEvent,OnUnload,TimerMap,FocusTracker,IdleCheck,Extractor,RuntimeMap,ScopeFilters,Similarity,ContextAssembly,Generation,WriteCallout,StateField,WidgetDeco,AcceptBtn,RejectBtn,FailurePause plugin
     class EmbeddingAPI,ChatAPI external
     class ShadowFiles,Settings storage
 ```
@@ -195,6 +204,7 @@ sequenceDiagram
     O->>P: onload()
     P->>P: loadSettings()
     P->>P: addSettingTab(), addCommand(), registerEvent()
+    P->>P: registerEditorExtension() — CM6 callout decorations
 
     O->>P: onLayoutReady()
 

@@ -168,8 +168,9 @@ Each callout:
 
 - Uses a system-specific type: `[!connection]` (System 1) or `[!ideation]` (System 2).
 - Is visually distinct in both edit and reading mode via Obsidian's native callout styling.
-- Can be individually accepted or rejected via plugin commands (not inline UI buttons).
-- **Acceptance:** The callout markers are removed. The content becomes part of the note — indistinguishable from human-written text. The note is re-embedded on the next idle cycle.
+- Displays inline accept/reject buttons rendered directly on each callout via CodeMirror 6 decorations in the editor. The user reviews and acts without leaving the note.
+- Commands for accept, reject, and batch reject remain available via the command palette as a keyboard-accessible fallback.
+- **Acceptance:** The callout markers are removed. The content becomes part of the note — indistinguishable from human-written text. The inline buttons disappear. The note is re-embedded on the next idle cycle.
 - **Rejection:** The entire callout is deleted permanently. The system does not track rejections and may propose the same connection again in the future.
 - Can be batch-managed via plugin commands (e.g., "reject all pending proposals").
 

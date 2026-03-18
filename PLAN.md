@@ -77,11 +77,20 @@ onload()
 ### Flow D: Accept / Reject
 
 ```
-User runs command (command palette or hotkey)
-  → editorCheckCallback: is cursor inside a callout? → show/hide command
-  → Accept: vault.process() strips callout markers, content stays
-  → Reject: vault.process() deletes entire callout block
-  → Note is now modified → re-enters idle pipeline
+CM6 StateField scans document for [!connection] / [!ideation] callouts
+  → renders widget decoration with accept/reject buttons on each callout
+
+User clicks accept button (or runs accept command from palette):
+  → button dispatches StateEffect
+  → vault.process() strips callout markers, content stays as plain text
+  → decoration removed
+  → note is now modified → re-enters idle pipeline
+
+User clicks reject button (or runs reject command from palette):
+  → button dispatches StateEffect
+  → vault.process() deletes entire callout block
+  → decoration removed
+  → note is now modified → re-enters idle pipeline
 ```
 
 ---
@@ -96,13 +105,14 @@ Start with two files. Split later if needed.
 - Embedding index (shadow file read/write, runtime map)
 - Retrieval pipeline (scope filters, similarity, LLM call)
 - Callout writing (vault.process, accept, reject)
+- CM6 editor extension (callout decorations with inline buttons)
 - @agent tag scanning
 
 **`settings.ts`** — settings tab:
 - Settings interface and defaults
 - PluginSettingTab subclass
 
-**When to split:** If any section of `main.ts` exceeds ~200 lines of focused logic, extract it. Likely candidates in order: embedding API calls, retrieval pipeline, idle tracker.
+**When to split:** If any section of `main.ts` exceeds ~200 lines of focused logic, extract it. Likely candidates in order: CM6 editor extension (decorations are self-contained), embedding API calls, retrieval pipeline, idle tracker.
 
 ---
 
@@ -125,7 +135,9 @@ LLM Generation (needs search results + note content)
   ↓
 Callout Writer (needs LLM output + idle check)
   ↓
-Accept/Reject Commands (needs callout parsing)
+CM6 Decorations (needs callout patterns to detect)
+  ↓
+Accept/Reject via buttons + command fallback (needs callout parsing)
 ```
 
 ---
@@ -173,13 +185,22 @@ Sequential phases. Each phase is testable independently before moving on.
 - Same pipeline as System 1 with different prompt and [!ideation] callout type
 - **Test:** Write a question with @agent, switch away → [!ideation] callout appears
 
-### Phase 7 — Accept / Reject
-- Three commands with editorCheckCallback
-- Callout parsing (find callout block boundaries)
-- Accept: strip markers via vault.process()
-- Reject: delete block via vault.process()
+### Phase 7a — CM6 Callout Decorations
+- StateField that scans document for `> [!connection]` and `> [!ideation]` patterns
+- WidgetType subclass rendering accept/reject buttons per callout
+- Register via `registerEditorExtension()` in onload()
+- Decorations persist across edits via `DecorationSet.map(tr.changes)`
+- Import `@codemirror/view` and `@codemirror/state` from Obsidian (external, never bundled)
+- **Test:** Open a note with a callout → inline buttons visible in editor
+
+### Phase 7b — Accept / Reject Logic
+- Button click dispatches StateEffect → triggers vault.process() accept/reject
+- Accept: strip callout markers, keep content as plain text
+- Reject: delete entire callout block
+- Decoration removed after action
+- Three command palette commands with editorCheckCallback as keyboard fallback
 - Reject all: find and remove all plugin callouts
-- **Test:** Accept a proposal → markers gone, content remains. Reject → block gone.
+- **Test:** Click accept button → markers gone, content remains, button disappears. Click reject → block gone.
 
 ### Phase 8 — Hardening
 - API failure pause (5 consecutive failures → 60s pause, per TDD Section 4)
