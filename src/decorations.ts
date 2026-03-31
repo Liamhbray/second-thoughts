@@ -1,5 +1,6 @@
 import {
 	EditorView,
+	ViewUpdate,
 	WidgetType,
 	Decoration,
 	DecorationSet,
@@ -145,6 +146,8 @@ function buildDecorations(text: string): DecorationSet {
 	return builder.finish();
 }
 
+export { findCallouts };
+
 export const calloutDecorationField = StateField.define<DecorationSet>({
 	create(state) {
 		return buildDecorations(state.doc.toString());
@@ -161,3 +164,22 @@ export const calloutDecorationField = StateField.define<DecorationSet>({
 		return EditorView.decorations.from(field);
 	},
 });
+
+// --- Effect listener (bridges CM6 effects → plugin callbacks) ---
+
+export function createCalloutEffectListener(
+	onAccept: (from: number, to: number) => void,
+	onReject: (from: number, to: number) => void
+): (update: ViewUpdate) => void {
+	return (update: ViewUpdate) => {
+		for (const tr of update.transactions) {
+			for (const effect of tr.effects) {
+				if (effect.is(acceptCallout)) {
+					onAccept(effect.value.from, effect.value.to);
+				} else if (effect.is(rejectCallout)) {
+					onReject(effect.value.from, effect.value.to);
+				}
+			}
+		}
+	};
+}

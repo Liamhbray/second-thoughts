@@ -1,4 +1,4 @@
-import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 import {
 	SecondThoughtsSettings,
 	DEFAULT_SETTINGS,
@@ -21,7 +21,12 @@ import {
 	generateSystem2Callout,
 	findAgentPrompt,
 } from "./retrieval";
-import { calloutDecorationField } from "./decorations";
+import { EditorView } from "@codemirror/view";
+import {
+	calloutDecorationField,
+	createCalloutEffectListener,
+	findCallouts,
+} from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -74,7 +79,62 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		this.registerEditorExtension([calloutDecorationField]);
+		const effectListener = createCalloutEffectListener(
+			(from, to) => this.handleAccept(from, to),
+			(from, to) => this.handleReject(from, to)
+		);
+
+		this.registerEditorExtension([
+			calloutDecorationField,
+			EditorView.updateListener.of(effectListener),
+		]);
+
+		this.addCommand({
+			id: "accept-callout",
+			name: "Accept proposal at cursor",
+			editorCheckCallback: (checking, editor, view) => {
+				const file = view.file;
+				if (!file) return false;
+				const cursor = editor.getCursor();
+				const content = editor.getValue();
+				const callout = this.findCalloutAtLine(content, cursor.line);
+				if (!callout) return false;
+				if (checking) return true;
+				this.handleAccept(callout.from, callout.to);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "reject-callout",
+			name: "Reject proposal at cursor",
+			editorCheckCallback: (checking, editor, view) => {
+				const file = view.file;
+				if (!file) return false;
+				const cursor = editor.getCursor();
+				const content = editor.getValue();
+				const callout = this.findCalloutAtLine(content, cursor.line);
+				if (!callout) return false;
+				if (checking) return true;
+				this.handleReject(callout.from, callout.to);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "reject-all-callouts",
+			name: "Reject all proposals",
+			editorCheckCallback: (checking, editor, view) => {
+				const file = view.file;
+				if (!file) return false;
+				const content = editor.getValue();
+				const callouts = findCallouts(content);
+				if (callouts.length === 0) return false;
+				if (checking) return true;
+				this.handleRejectAll(file);
+				return true;
+			},
+		});
 
 		this.app.workspace.onLayoutReady(() => {
 			this.bootstrap();
@@ -174,6 +234,118 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.index.set(file.path, shadow);
 
 		console.log(`Second Thoughts: embedded ${file.path}`);
+	}
+
+	private getActiveFile(): TFile | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		return view?.file ?? null;
+	}
+
+	private findCalloutAtLine(
+		content: string,
+		line: number
+	): { from: number; to: number } | null {
+		const callouts = findCallouts(content);
+		const lines = content.split("\n");
+		let pos = 0;
+		for (let i = 0; i < line && i < lines.length; i++) {
+			pos += lines[i].length + 1;
+		}
+		// Cursor position is within `pos` to `pos + lines[line].length`
+		const cursorPos = pos;
+		for (const c of callouts) {
+			if (cursorPos >= c.from && cursorPos <= c.to) {
+				return { from: c.from, to: c.to };
+			}
+		}
+		return null;
+	}
+
+	private async handleAccept(from: number, to: number): Promise<void> {
+		const file = this.getActiveFile();
+		if (!file) return;
+
+		try {
+			await this.app.vault.process(file, (data) => {
+				const block = data.slice(from, to);
+				// Strip callout markers: remove `> [!connection]`/`> [!ideation]` header
+				// and `> ` prefix from continuation lines
+				const lines = block.split("\n");
+				const contentLines: string[] = [];
+				for (let i = 0; i < lines.length; i++) {
+					if (i === 0) {
+						// Skip the header line `> [!type]`
+						continue;
+					}
+					// Strip `> ` prefix
+					contentLines.push(lines[i].replace(/^>\s?/, ""));
+				}
+				const plainContent = contentLines.join("\n").trim();
+				return data.slice(0, from) + plainContent + data.slice(to);
+			});
+			console.log(`Second Thoughts: accepted callout in ${file.path}`);
+		} catch (e) {
+			console.error("Second Thoughts: accept failed", e);
+		}
+	}
+
+	private async handleReject(from: number, to: number): Promise<void> {
+		const file = this.getActiveFile();
+		if (!file) return;
+
+		try {
+			await this.app.vault.process(file, (data) => {
+				// Delete the entire callout block and surrounding blank lines
+				let start = from;
+				let end = to;
+				// Consume trailing newline
+				while (end < data.length && data[end] === "\n") {
+					end++;
+				}
+				// Consume leading blank line
+				if (start > 0 && data[start - 1] === "\n") {
+					start--;
+					if (start > 0 && data[start - 1] === "\n") {
+						start--;
+					}
+				}
+				return data.slice(0, start) + data.slice(end);
+			});
+			console.log(`Second Thoughts: rejected callout in ${file.path}`);
+		} catch (e) {
+			console.error("Second Thoughts: reject failed", e);
+		}
+	}
+
+	private async handleRejectAll(file: TFile): Promise<void> {
+		try {
+			await this.app.vault.process(file, (data) => {
+				const callouts = findCallouts(data);
+				if (callouts.length === 0) return data;
+
+				// Process in reverse to preserve offsets
+				let result = data;
+				for (let i = callouts.length - 1; i >= 0; i--) {
+					const c = callouts[i];
+					let start = c.from;
+					let end = c.to;
+					while (end < result.length && result[end] === "\n") {
+						end++;
+					}
+					if (start > 0 && result[start - 1] === "\n") {
+						start--;
+						if (start > 0 && result[start - 1] === "\n") {
+							start--;
+						}
+					}
+					result = result.slice(0, start) + result.slice(end);
+				}
+				return result;
+			});
+			console.log(`Second Thoughts: rejected all callouts in ${file.path}`);
+		} catch (e) {
+			console.error("Second Thoughts: reject-all failed", e);
+		}
 	}
 
 	private async runSystem1(file: TFile): Promise<void> {
