@@ -1,0 +1,10 @@
+{
+  "apiKey": "",
+  "idleDebounceMinutes": 0.1,
+  "system1HopDepth": 3,
+  "system2ScopeDefault": "vault",
+  "topKPerCompartment": 5,
+  "excludedFolders": ["Scratch"],
+  "excludedTags": [],
+  "agentTag": "@agent"
+}

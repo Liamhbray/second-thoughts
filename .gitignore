@@ -19,3 +19,11 @@
 !src/
 !src/**
 
+# Whitelist: seed vault (notes + obsidian config, not plugin build artifacts)
+!seed-vault/
+!seed-vault/**
+seed-vault/.obsidian/plugins/second-thoughts/main.js
+seed-vault/.obsidian/plugins/second-thoughts/manifest.json
+seed-vault/.obsidian/plugins/second-thoughts/embeddings/
+seed-vault/.obsidian/workspace.json
+

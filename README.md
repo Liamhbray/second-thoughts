@@ -69,6 +69,31 @@ Commands are also available in the command palette:
 
 All file writes use Obsidian's atomic `vault.process()` API. All network calls use `requestUrl()`. The plugin never modifies your existing content — proposals are always additive.
 
+## Development
+
+```bash
+git clone https://github.com/Liamhbray/second-thoughts.git
+cd second-thoughts
+npm install
+```
+
+Add your OpenAI API key to the seed vault settings:
+
+```bash
+# Edit seed-vault/.obsidian/plugins/second-thoughts/data.json
+# Set "apiKey" to your key
+```
+
+Open the `seed-vault` folder as a vault in Obsidian (one-time setup), then enable the plugin in **Settings > Community Plugins**.
+
+```bash
+npm run build     # Build and deploy to seed vault
+npm test          # Run unit tests (33 tests, pure functions)
+npm run e2e       # Run E2E tests against seed vault (requires Obsidian running)
+```
+
+The E2E suite auto-opens the vault, bootstraps embeddings for 17 whale-themed notes, and tests the full pipeline: embedding, System 1/2 proposals, deduplication, accept/reject.
+
 ## Privacy
 
 Note content is sent to the OpenAI API for embedding and generation. No data is stored externally. Embeddings are cached locally in your vault's plugin data directory.

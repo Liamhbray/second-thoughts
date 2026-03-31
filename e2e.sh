@@ -1,14 +1,21 @@
 #!/bin/bash
 # e2e.sh — End-to-end test for Second Thoughts plugin
-# Requires: Obsidian 1.12+ running with CLI enabled, dev vault open
+# Requires: Obsidian 1.12+ running with CLI enabled, seed-vault open
+# Uses the seed vault's existing whale notes — no synthetic files created.
 # Usage: npm run e2e
 
 set -euo pipefail
 
-VAULT="second-thoughts-dev"
+VAULT="seed-vault"
 PLUGIN="second-thoughts"
 TIMEOUT=120
 POLL_INTERVAL=2
+
+# Seed vault notes used by tests
+SYSTEM1_NOTE="Biology/Blue Whales.md"       # dense links, good System 1 candidate
+SYSTEM2_NOTE="Culture/Moby-Dick.md"         # has @agent prompt
+SWITCH_NOTE="Ecology/Ocean Currents.md"     # switch-away target
+SEED_COUNT=17                               # expected note count in seed vault
 
 pass=0
 fail=0
@@ -16,21 +23,14 @@ total=0
 
 # --- Helpers ---
 
-# CLI eval requires (async () => { ... })() for await expressions.
-# Synchronous expressions work bare. All output is parsed via sed to
-# strip the CLI loading messages and extract the "=> <result>" line.
-
+# CLI eval: parse "=> <result>" from output, discard loading messages.
 eval_ob() {
   obsidian vault="$VAULT" eval code="$1" 2>/dev/null | sed -n 's/^=> //p'
 }
 
-# Async eval helper — wraps code in an async IIFE
+# Async eval: wraps code in async IIFE (bare await unsupported in CLI eval).
 aeval_ob() {
   eval_ob "(async () => { $1 })()"
-}
-
-debug_state() {
-  eval_ob "JSON.stringify(app.plugins.plugins['$PLUGIN'].getDebugState())"
 }
 
 P="app.plugins.plugins['$PLUGIN']"
@@ -45,6 +45,18 @@ assert_true() {
     ((pass++))
   else
     echo "  FAIL: $desc (got: $result)"
+    ((fail++))
+  fi
+}
+
+assert_gte() {
+  local desc="$1" actual="$2" expected="$3"
+  ((total++))
+  if [ "$actual" -ge "$expected" ] 2>/dev/null; then
+    echo "  PASS: $desc ($actual >= $expected)"
+    ((pass++))
+  else
+    echo "  FAIL: $desc (expected >= $expected, got '$actual')"
     ((fail++))
   fi
 }
@@ -81,23 +93,32 @@ wait_for() {
   return 1
 }
 
-# Async version of wait_for — wraps check in async IIFE
 await_for() {
   local desc="$1" check="$2" max="${3:-$TIMEOUT}"
   wait_for "$desc" "(async () => { $check })()" "$max"
 }
 
 switch_away() {
-  # Open a different file to make the edited file no longer active
-  aeval_ob "await app.workspace.openLinkText('E2E-NoteB', '', false)" > /dev/null 2>&1
+  aeval_ob "await app.workspace.openLinkText('$SWITCH_NOTE', '', false)" > /dev/null 2>&1
   sleep 1
 }
 
 # Modify a file via vault.modify() to trigger vault 'modify' event.
-# vault.adapter methods do NOT fire vault events.
 trigger_modify() {
   local path="$1"
   aeval_ob "const f = app.vault.getFileByPath('$path'); const c = await app.vault.read(f); await app.vault.modify(f, c + '\\n'); return 'ok';" > /dev/null 2>&1
+}
+
+# Strip all callouts from a file, restoring it to its original state.
+strip_callouts() {
+  local path="$1"
+  aeval_ob "
+    const f = app.vault.getFileByPath('$path');
+    await app.vault.process(f, (data) => {
+      return data.replace(/\\n?> \\[!(connection|ideation)\\][^]*?(?=\\n[^>]|$)/gm, '').trimEnd() + '\\n';
+    });
+    return 'stripped';
+  " > /dev/null 2>&1
 }
 
 # --- Pre-flight ---
@@ -109,50 +130,59 @@ if ! command -v obsidian &> /dev/null; then
   exit 1
 fi
 
-# Check Obsidian is running and vault is accessible
+# Ensure Obsidian is running with the seed vault open
 vault_check=$(eval_ob "typeof app.vault" 2>/dev/null || echo "unreachable")
-if [ "$vault_check" != "object" ]; then
-  echo "  ERROR: Cannot reach Obsidian. Is it running with vault '$VAULT' open?"
-  exit 1
+if [ "$vault_check" = "unreachable" ]; then
+  echo "  Opening vault '$VAULT' in Obsidian..."
+  open "obsidian://open?vault=$VAULT"
+  elapsed=0
+  while [ $elapsed -lt 30 ]; do
+    sleep 2
+    ((elapsed+=2))
+    vault_check=$(eval_ob "typeof app.vault" 2>/dev/null || echo "unreachable")
+    if [ "$vault_check" = "object" ]; then break; fi
+  done
+  if [ "$vault_check" != "object" ]; then
+    echo "  ERROR: Timed out waiting for Obsidian to open vault '$VAULT'"
+    exit 1
+  fi
 fi
 
 echo "  Obsidian CLI connected to vault '$VAULT'"
+
+# Verify seed notes exist
+note_count=$(eval_ob "app.vault.getMarkdownFiles().length")
+if [ "$note_count" -lt "$SEED_COUNT" ] 2>/dev/null; then
+  echo "  ERROR: Expected $SEED_COUNT+ notes in seed vault, found $note_count"
+  exit 1
+fi
+echo "  Seed vault has $note_count notes"
 
 # --- Setup ---
 
 echo ""
 echo "=== Setup ==="
 
-# Clean up any leftover test files and stale shadow files
-aeval_ob "for (const n of ['E2E-NoteA.md','E2E-NoteB.md','E2E-NoteC.md']) { try { await app.vault.adapter.remove(n) } catch {} } return 'cleaned'" > /dev/null 2>&1
-
-# Remove all cached embeddings so proposed arrays don't interfere
+# Clear stale embeddings and callouts from prior runs
 EMBED_DIR="$VAULT/.obsidian/plugins/$PLUGIN/embeddings"
 if [ -d "$EMBED_DIR" ]; then
   rm -f "$EMBED_DIR"/*.json
   echo "  Cleared embedding cache"
 fi
 
+strip_callouts "$SYSTEM1_NOTE"
+strip_callouts "$SYSTEM2_NOTE"
+echo "  Stripped leftover callouts from test notes"
+
 # Reload plugin for clean state
 obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
 sleep 3
-
-# Create test notes via vault.create() so Obsidian tracks them
-aeval_ob "await app.vault.create('E2E-NoteA.md', '# Feedback Loops\n\nFeedback loops are circular processes where outputs become inputs.\nPositive feedback amplifies change; negative feedback dampens it.\nSystems with feedback loops exhibit emergent behaviour.\nBiological systems use feedback for homeostasis.\n\nSee also: [[E2E-NoteB]] and [[E2E-NoteC]].'); return 'ok'" > /dev/null 2>&1
-
-aeval_ob "await app.vault.create('E2E-NoteB.md', '# Systems Thinking\n\nSystems thinking examines how components interrelate within a whole.\nKey concepts: emergence, feedback, nonlinearity, self-organisation.\nEngineers use systems thinking to design resilient architectures.\nThe discipline draws from cybernetics and control theory.\n\nRelated: [[E2E-NoteA]].'); return 'ok'" > /dev/null 2>&1
-
-aeval_ob "await app.vault.create('E2E-NoteC.md', '# Resilience Patterns\n\nResilience in engineering means graceful degradation under stress.\nRedundancy, circuit breakers, and backpressure are core patterns.\n\nSee [[E2E-NoteA]] and [[E2E-NoteB]] for background.\n\nHow do my notes on feedback loops connect to systems thinking? @agent'); return 'ok'" > /dev/null 2>&1
-
-echo "  Created 3 test notes"
+echo "  Plugin reloaded"
 
 # --- Test 1: Bootstrap ---
 
 echo ""
 echo "=== Test 1: Bootstrap ==="
-
-obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
-sleep 2
 
 wait_for "Bootstrap completes" \
   "$P.getDebugState().bootstrapComplete" \
@@ -163,34 +193,27 @@ wait_for "Bootstrap completes" \
 echo ""
 echo "=== Test 2: Embedding ==="
 
-wait_for "E2E-NoteA indexed" \
-  "$P.getDebugState().hasEntry('E2E-NoteA.md')" \
-  "$TIMEOUT"
-
-wait_for "E2E-NoteB indexed" \
-  "$P.getDebugState().hasEntry('E2E-NoteB.md')" \
-  "$TIMEOUT"
-
-wait_for "E2E-NoteC indexed" \
-  "$P.getDebugState().hasEntry('E2E-NoteC.md')" \
-  "$TIMEOUT"
-
 index_size=$(eval_ob "$P.getDebugState().indexSize")
-echo "  Index size: $index_size"
-assert_true "Index has 3+ entries" \
-  "$P.getDebugState().indexSize >= 3"
+assert_gte "Index has $SEED_COUNT+ entries" "$index_size" "$SEED_COUNT"
+
+wait_for "System 1 note indexed" \
+  "$P.getDebugState().hasEntry('$SYSTEM1_NOTE')" \
+  "$TIMEOUT"
+
+wait_for "System 2 note indexed" \
+  "$P.getDebugState().hasEntry('$SYSTEM2_NOTE')" \
+  "$TIMEOUT"
 
 # --- Test 3: System 1 — Connection Proposal ---
 
 echo ""
 echo "=== Test 3: System 1 ==="
 
-# Modify NoteA via vault.modify() to trigger idle pipeline, then switch away
-trigger_modify "E2E-NoteA.md"
+trigger_modify "$SYSTEM1_NOTE"
 switch_away
 
-await_for "NoteA gets [!connection] callout" \
-  "return (await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" \
+await_for "Blue Whales gets [!connection] callout" \
+  "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" \
   "$TIMEOUT" || true
 
 # --- Test 4: System 2 — @agent Response ---
@@ -198,12 +221,11 @@ await_for "NoteA gets [!connection] callout" \
 echo ""
 echo "=== Test 4: System 2 ==="
 
-# NoteC has @agent — trigger modify and switch away
-trigger_modify "E2E-NoteC.md"
+trigger_modify "$SYSTEM2_NOTE"
 switch_away
 
-await_for "NoteC gets [!ideation] callout" \
-  "return (await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" \
+await_for "Moby-Dick gets [!ideation] callout" \
+  "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
   "$TIMEOUT" || true
 
 # --- Test 5: Deduplication ---
@@ -211,37 +233,33 @@ await_for "NoteC gets [!ideation] callout" \
 echo ""
 echo "=== Test 5: Deduplication ==="
 
-count_before=$(aeval_ob "return ((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
+count_before=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\\\[!connection\\\\]/g)||[]).length")
 
-# Trigger idle again on NoteA
-trigger_modify "E2E-NoteA.md"
+trigger_modify "$SYSTEM1_NOTE"
 switch_away
-
-# Wait for processing to complete
 sleep 15
 
-count_after=$(aeval_ob "return ((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
-assert_eq "No duplicate callout on NoteA" "$count_after" "$count_before"
+count_after=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\\\[!connection\\\\]/g)||[]).length")
+assert_eq "No duplicate callout on Blue Whales" "$count_after" "$count_before"
 
 # --- Test 6: ownWrites guard ---
 
 echo ""
 echo "=== Test 6: ownWrites ==="
 
-assert_true "No idle timer after own write on NoteA" \
-  "!$P.getDebugState().idleTimerPaths.includes('E2E-NoteA.md')"
+assert_true "No idle timer after own write" \
+  "!$P.getDebugState().idleTimerPaths.includes('$SYSTEM1_NOTE')"
 
 # --- Test 7: Accept ---
 
 echo ""
 echo "=== Test 7: Accept ==="
 
-# Check if NoteA has a callout to accept
-has_callout=$(aeval_ob "return (await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" || echo "false")
+has_callout=$(aeval_ob "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" || echo "false")
 if [ "$has_callout" = "true" ]; then
-  # Accept by directly calling vault.process — replicates handleAccept logic
-  aeval_ob "
-    const f = app.vault.getFileByPath('E2E-NoteA.md');
+  accept_result=$(aeval_ob "
+    const f = app.vault.getFileByPath('$SYSTEM1_NOTE');
+    if (!f) return 'ERR: file not found';
     await app.vault.process(f, (data) => {
       const re = /^> \\[!(connection|ideation)\\].*(?:\\n> .*)*(?:\\n)?/m;
       const m = re.exec(data);
@@ -252,11 +270,12 @@ if [ "$has_callout" = "true" ]; then
       return data.slice(0, m.index) + content + data.slice(m.index + block.length);
     });
     return 'accepted';
-  " > /dev/null 2>&1
+  ")
+  echo "  accept: $accept_result"
   sleep 2
 
   await_for "Callout markers removed after accept" \
-    "return !(await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" \
+    "return !(await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" \
     10
 else
   echo "  SKIP: No callout present to test accept (System 1 may not have fired)"
@@ -267,11 +286,10 @@ fi
 echo ""
 echo "=== Test 8: Reject ==="
 
-has_ideation=$(aeval_ob "return (await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" || echo "false")
+has_ideation=$(aeval_ob "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" || echo "false")
 if [ "$has_ideation" = "true" ]; then
-  # Reject by directly calling vault.process — replicates handleReject logic
   aeval_ob "
-    const f = app.vault.getFileByPath('E2E-NoteC.md');
+    const f = app.vault.getFileByPath('$SYSTEM2_NOTE');
     await app.vault.process(f, (data) => {
       const re = /\\n?> \\[!(connection|ideation)\\].*(?:\\n> .*)*\\n?/m;
       const m = re.exec(data);
@@ -283,7 +301,7 @@ if [ "$has_ideation" = "true" ]; then
   sleep 2
 
   await_for "Callout block removed after reject" \
-    "return !(await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" \
+    "return !(await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
     10
 else
   echo "  SKIP: No ideation callout present to test reject"
@@ -294,9 +312,15 @@ fi
 echo ""
 echo "=== Cleanup ==="
 
-aeval_ob "for (const n of ['E2E-NoteA.md','E2E-NoteB.md','E2E-NoteC.md']) { try { await app.vault.adapter.remove(n) } catch {} } return 'done'" > /dev/null 2>&1
+# Restore seed notes to their original state (strip any remaining callouts)
+strip_callouts "$SYSTEM1_NOTE"
+strip_callouts "$SYSTEM2_NOTE"
+
+# Clear embeddings so next run starts fresh
+rm -f "$EMBED_DIR"/*.json
+
 obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
-echo "  Cleaned up test files and reloaded plugin"
+echo "  Restored seed notes and reloaded plugin"
 
 # --- Results ---
 

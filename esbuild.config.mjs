@@ -4,7 +4,7 @@ import { copyFileSync } from "fs";
 import builtins from "builtin-modules";
 
 const prod = process.argv[2] === "production";
-const devVaultPlugin = "second-thoughts-dev/.obsidian/plugins/second-thoughts";
+const devVaultPlugin = "seed-vault/.obsidian/plugins/second-thoughts";
 
 const context = await esbuild.context({
 	entryPoints: ["src/main.ts"],
