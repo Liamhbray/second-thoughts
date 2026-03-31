@@ -377,38 +377,28 @@ export async function generateSystem1Callout(
 	return text;
 }
 
-// --- System 2 ---
+// --- Ideation ---
 
-function buildSystem2Prompt(
+function buildIdeationPrompt(
 	noteContent: string,
 	notePath: string,
-	agentPrompt: string,
+	userPrompt: string,
 	results: RetrievalResults,
 	app: App
 ): string {
-	return `You are an assistant that explores a user's questions and ideas using only knowledge from their personal notes. You will be given:
-1. The content of the current note
-2. The user's specific question or prompt (tagged with @agent)
-3. A set of related notes found by semantic similarity
-
-Your task: synthesise a response that addresses the user's prompt using ONLY material from their notes.
+	return `You are an assistant that explores a user's questions and ideas using only knowledge from their personal notes.
 
 Rules:
-- Output ONLY the callout block, nothing else
-- Use this exact format:
-
-> [!ideation]
-> Your synthesis with [[NoteNames]] woven naturally into the response — drawing connections across the user's own notes to address their question.
-
-- All wikilinks must reference real notes from the results
-- Synthesise across multiple notes where relevant
-- Draw only from the user's own notes — no external knowledge
+- Write plain prose with [[NoteNames]] as wikilinks where relevant
+- Synthesise across multiple notes where appropriate
+- Draw ONLY from the user's own notes — no external knowledge
 - Address the user's prompt directly
-- If no relevant material exists, output nothing
+- Do NOT use callout blocks, headers, or special formatting
+- If no relevant material exists, say so briefly
 
 User's prompt:
 ---
-${agentPrompt}
+${userPrompt}
 ---
 
 Current note (${notePath}):
@@ -421,75 +411,19 @@ Related notes found by similarity:
 ${formatResultSections(results, app)}`;
 }
 
-export async function generateSystem2Callout(
+export async function generateIdeation(
 	noteContent: string,
 	notePath: string,
-	agentPrompt: string,
+	userPrompt: string,
 	results: RetrievalResults,
 	apiKey: string,
 	app: App
 ): Promise<string | null> {
-	const prompt = buildSystem2Prompt(noteContent, notePath, agentPrompt, results, app);
+	const prompt = buildIdeationPrompt(noteContent, notePath, userPrompt, results, app);
 	const text = await callLLM(prompt, apiKey);
-	if (!text || !text.includes("[!ideation]")) {
+	if (!text || text.trim().length === 0) {
 		return null;
 	}
-	return text;
+	return text.trim();
 }
 
-// --- @agent tag scanning ---
-
-export function findAgentPromptEnd(
-	content: string,
-	agentTag: string
-): number {
-	const lines = content.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		if (lines[i].includes(agentTag)) {
-			let end = i;
-			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
-				end++;
-			}
-			// Return character offset of end of this paragraph
-			let offset = 0;
-			for (let j = 0; j <= end; j++) {
-				offset += lines[j].length + 1;
-			}
-			return offset - 1; // exclude trailing newline
-		}
-	}
-	return -1;
-}
-
-export function findAgentPrompt(
-	content: string,
-	agentTag: string
-): string | null {
-	// Find the line containing the agent tag
-	const lines = content.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		if (lines[i].includes(agentTag)) {
-			// The prompt is the text around the tag — take the paragraph
-			const promptLines: string[] = [];
-			// Scan backwards for paragraph start
-			let start = i;
-			while (start > 0 && lines[start - 1].trim().length > 0) {
-				start--;
-			}
-			// Scan forwards for paragraph end
-			let end = i;
-			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
-				end++;
-			}
-			for (let j = start; j <= end; j++) {
-				promptLines.push(lines[j]);
-			}
-			// Remove the tag itself from the prompt text
-			return promptLines
-				.join("\n")
-				.replace(agentTag, "")
-				.trim();
-		}
-	}
-	return null;
-}

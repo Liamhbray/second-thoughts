@@ -15,15 +15,11 @@ import {
 } from "./embedding";
 import {
 	filterCandidates,
-	filterCandidatesSystem2,
 	retrieveSimilar,
-	generateSystem1Callout,
-	generateSystem2Callout,
 	generateFootnoteReason,
-	findAgentPrompt,
-	findAgentPromptEnd,
 	cosineSimilarity,
 } from "./retrieval";
+import { IdeationModal, ST_IDEA_START, ST_IDEA_END } from "./ideation-modal";
 import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
@@ -79,55 +75,32 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		// Ideation callout buttons (kept until ideas feature replaces them)
-		this.registerMarkdownPostProcessor((el, ctx) => {
-			const ideationEls = el.querySelectorAll<HTMLElement>(
-				'.callout[data-callout="ideation"]'
-			);
-			for (const calloutEl of ideationEls) {
-				const titleEl = calloutEl.querySelector(".callout-title");
-				if (!titleEl) continue;
+		// Post-processor: style %%st-idea%% blocks in reading mode
+		this.registerMarkdownPostProcessor((el) => {
+			// Obsidian strips %% comments in reading mode, so the markers
+			// won't appear. Instead, we use a class-based approach:
+			// the markers are visible in source mode only. In reading mode,
+			// we detect paragraphs that were between markers by checking
+			// the raw source via a parent scan. This is a no-op for now —
+			// styling is handled by CM6 decorations or source-mode visibility.
+			// The primary UX is the blue border in source/live-preview mode.
+		});
 
-				const btnContainer = createEl("span", {
-					cls: "second-thoughts-callout-buttons",
-				});
-				btnContainer.style.cssText =
-					"display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;";
-
-				const acceptBtn = btnContainer.createEl("button", {
-					text: "Accept",
-					cls: "second-thoughts-accept-btn",
-				});
-				acceptBtn.style.cssText =
-					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--interactive-accent); color: var(--text-on-accent);";
-
-				const rejectBtn = btnContainer.createEl("button", {
-					text: "Reject",
-					cls: "second-thoughts-reject-btn",
-				});
-				rejectBtn.style.cssText =
-					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--background-secondary); color: var(--text-normal);";
-
-				const filePath = ctx.sourcePath;
-
-				acceptBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleCalloutByType("accept", "ideation", filePath);
-				});
-
-				rejectBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleCalloutByType("reject", "ideation", filePath);
-				});
-
-				titleEl.appendChild(btnContainer);
-			}
+		// Command: open ideation modal
+		this.addCommand({
+			id: "ideate",
+			name: "Ask Second Thoughts",
+			editorCallback: (editor, view) => {
+				if (!view.file) return;
+				new IdeationModal(
+					this.app,
+					editor,
+					editor.getCursor(),
+					this.settings,
+					this.index,
+					view.file.path
+				).open();
+			},
 		});
 
 		this.addCommand({
@@ -254,10 +227,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 				await this.embedNote(file);
 				this.recordApiSuccess();
 
-				// System 2: runs at any coverage level
-				await this.runSystem2(file);
-
-				// System 1: only after bootstrap complete
+				// System 1 (footnotes): only after bootstrap complete
 				if (this.bootstrapComplete) {
 					await this.runSystem1(file);
 				}
@@ -360,21 +330,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 						contentLines.push(lines[i].replace(/^>\s?/, ""));
 					}
 					const plainContent = contentLines.join("\n").trim();
-					let result =
+					return (
 						data.slice(0, callout.from) +
 						plainContent +
-						data.slice(callout.to);
-
-					// For ideation: also strip the @agent prompt line
-					if (calloutType === "ideation") {
-						const tag = this.settings.agentTag;
-						const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-						result = result.replace(
-							new RegExp("^[^\\n]*" + escaped + "[^\\n]*\\n?", "m"),
-							""
-						);
-					}
-					return result;
+						data.slice(callout.to)
+					);
 				} else {
 					let start = callout.from;
 					let end = callout.to;
@@ -649,75 +609,6 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 		new Notice(`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`);
 		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
-	}
-
-	private async runSystem2(file: TFile): Promise<void> {
-		const noteContent = await this.app.vault.read(file);
-		const agentPrompt = findAgentPrompt(noteContent, this.settings.agentTag);
-
-		if (!agentPrompt) {
-			return;
-		}
-
-		const shadow = this.index.get(file.path);
-		if (!shadow) return;
-
-		const candidates = filterCandidatesSystem2(
-			this.app,
-			file.path,
-			this.settings,
-			this.index
-		);
-
-		const results = retrieveSimilar(
-			shadow,
-			candidates,
-			this.index,
-			this.settings.topKPerCompartment
-		);
-
-		const callout = await generateSystem2Callout(
-			noteContent,
-			file.path,
-			agentPrompt,
-			results,
-			this.settings.apiKey,
-			this.app
-		);
-
-		if (!callout) {
-			console.log(`Second Thoughts: LLM returned no ideation for ${file.path}`);
-			return;
-		}
-
-		// Final idle re-check + atomic write
-		if (this.activeFilePath === file.path) {
-			return;
-		}
-
-		this.ownWrites.add(file.path);
-		await this.app.vault.process(file, (data) => {
-			if (this.activeFilePath === file.path) {
-				return data;
-			}
-			// Insert after the @agent paragraph
-			const endOffset = findAgentPromptEnd(
-				data,
-				this.settings.agentTag
-			);
-			if (endOffset === -1) {
-				return data + "\n\n" + callout + "\n";
-			}
-			return (
-				data.slice(0, endOffset + 1) +
-				"\n\n" +
-				callout +
-				"\n" +
-				data.slice(endOffset + 1)
-			);
-		});
-
-		console.log(`Second Thoughts: proposed ideation for ${file.path}`);
 	}
 
 	private async bootstrap() {

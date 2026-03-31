@@ -14,6 +14,7 @@
 !versions.json
 !README.md
 !LICENSE
+!styles.css
 
 # Whitelist: source code
 !src/
@@ -24,6 +25,7 @@
 !seed-vault/**
 seed-vault/.obsidian/plugins/second-thoughts/main.js
 seed-vault/.obsidian/plugins/second-thoughts/manifest.json
+seed-vault/.obsidian/plugins/second-thoughts/styles.css
 seed-vault/.obsidian/plugins/second-thoughts/embeddings/
 seed-vault/.obsidian/workspace.json
 
