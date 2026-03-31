@@ -19,10 +19,18 @@ import {
 	retrieveSimilar,
 	generateSystem1Callout,
 	generateSystem2Callout,
+	generateFootnoteReason,
 	findAgentPrompt,
 	findAgentPromptEnd,
+	cosineSimilarity,
 } from "./retrieval";
-import { findCallouts } from "./decorations";
+import {
+	findCallouts,
+	nextFootnoteId,
+	formatFootnote,
+	stripFootnoteMarker,
+	removeFootnote,
+} from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -77,11 +85,96 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
+		// Footnote post-processor: add Keep/Remove buttons to AI-generated footnotes
 		this.registerMarkdownPostProcessor((el, ctx) => {
-			const calloutEls = el.querySelectorAll<HTMLElement>(
-				'.callout[data-callout="connection"], .callout[data-callout="ideation"]'
+			const footnoteItems = el.querySelectorAll<HTMLElement>(
+				"section.footnotes ol li"
 			);
-			for (const calloutEl of calloutEls) {
+			for (const li of footnoteItems) {
+				const emEl = li.querySelector("em");
+				if (!emEl || emEl.textContent !== "(Second Thoughts)") continue;
+
+				// Extract footnote ID from the backref link
+				const backref = li.querySelector<HTMLAnchorElement>(
+					".footnote-backref"
+				);
+				if (!backref) continue;
+				const href = backref.getAttribute("href") || "";
+				const refMatch = href.match(/fnref-(\d+)-/);
+				if (!refMatch) continue;
+
+				// Find the matching st-N id by scanning the source
+				const file = this.app.vault.getFileByPath(ctx.sourcePath);
+				if (!file) continue;
+
+				// Read data-footref from the inline sup to get the actual ID
+				const footrefEl = el.querySelector<HTMLElement>(
+					`[data-footref^="st-"]`
+				);
+				// Fallback: scan all st- footnotes in the section
+				const allFootrefs = el.querySelectorAll<HTMLElement>(
+					`[data-footref^="st-"]`
+				);
+				// Match by position — footnote items are in order
+				const liIndex = Array.from(
+					li.parentElement?.children || []
+				).indexOf(li);
+				const stFootrefs = Array.from(allFootrefs).filter((fr) =>
+					fr.getAttribute("data-footref")?.startsWith("st-")
+				);
+				const matchedRef = stFootrefs[liIndex];
+				const footnoteId =
+					matchedRef?.getAttribute("data-footref") || "";
+				if (!footnoteId) continue;
+
+				const btnContainer = createEl("span", {
+					cls: "second-thoughts-footnote-buttons",
+				});
+				btnContainer.style.cssText =
+					"display: inline-flex; gap: 4px; margin-left: 8px;";
+
+				const keepBtn = btnContainer.createEl("button", {
+					text: "Keep",
+					cls: "second-thoughts-keep-btn",
+				});
+				keepBtn.style.cssText =
+					"font-size: 10px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
+					"border: 1px solid var(--background-modifier-border); " +
+					"background: var(--interactive-accent); color: var(--text-on-accent);";
+
+				const removeBtn = btnContainer.createEl("button", {
+					text: "Remove",
+					cls: "second-thoughts-remove-btn",
+				});
+				removeBtn.style.cssText =
+					"font-size: 10px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
+					"border: 1px solid var(--background-modifier-border); " +
+					"background: var(--background-secondary); color: var(--text-normal);";
+
+				const filePath = ctx.sourcePath;
+				const fnId = footnoteId;
+
+				keepBtn.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.handleFootnoteKeep(fnId, filePath);
+				});
+
+				removeBtn.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.handleFootnoteRemove(fnId, filePath);
+				});
+
+				// Insert before the backref link
+				backref.before(btnContainer);
+			}
+
+			// Ideation callout buttons (kept until ideas feature replaces them)
+			const ideationEls = el.querySelectorAll<HTMLElement>(
+				'.callout[data-callout="ideation"]'
+			);
+			for (const calloutEl of ideationEls) {
 				const titleEl = calloutEl.querySelector(".callout-title");
 				if (!titleEl) continue;
 
@@ -109,21 +202,18 @@ export default class SecondThoughtsPlugin extends Plugin {
 					"border: 1px solid var(--background-modifier-border); " +
 					"background: var(--background-secondary); color: var(--text-normal);";
 
-				const calloutType = calloutEl.getAttribute(
-					"data-callout"
-				) as string;
 				const filePath = ctx.sourcePath;
 
 				acceptBtn.addEventListener("click", (e) => {
 					e.preventDefault();
 					e.stopPropagation();
-					this.handleCalloutByType("accept", calloutType, filePath);
+					this.handleCalloutByType("accept", "ideation", filePath);
 				});
 
 				rejectBtn.addEventListener("click", (e) => {
 					e.preventDefault();
 					e.stopPropagation();
-					this.handleCalloutByType("reject", calloutType, filePath);
+					this.handleCalloutByType("reject", "ideation", filePath);
 				});
 
 				titleEl.appendChild(btnContainer);
@@ -336,6 +426,46 @@ export default class SecondThoughtsPlugin extends Plugin {
 		return null;
 	}
 
+	private async handleFootnoteKeep(
+		footnoteId: string,
+		filePath: string
+	): Promise<void> {
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!file) return;
+
+		try {
+			this.ownWrites.add(file.path);
+			await this.app.vault.process(file, (data) => {
+				return stripFootnoteMarker(data, footnoteId);
+			});
+			console.log(
+				`Second Thoughts: kept footnote [^${footnoteId}] in ${file.path}`
+			);
+		} catch (e) {
+			console.error("Second Thoughts: keep footnote failed", e);
+		}
+	}
+
+	private async handleFootnoteRemove(
+		footnoteId: string,
+		filePath: string
+	): Promise<void> {
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!file) return;
+
+		try {
+			this.ownWrites.add(file.path);
+			await this.app.vault.process(file, (data) => {
+				return removeFootnote(data, footnoteId);
+			});
+			console.log(
+				`Second Thoughts: removed footnote [^${footnoteId}] from ${file.path}`
+			);
+		} catch (e) {
+			console.error("Second Thoughts: remove footnote failed", e);
+		}
+	}
+
 	private async handleCalloutByType(
 		action: "accept" | "reject",
 		calloutType: string,
@@ -360,11 +490,21 @@ export default class SecondThoughtsPlugin extends Plugin {
 						contentLines.push(lines[i].replace(/^>\s?/, ""));
 					}
 					const plainContent = contentLines.join("\n").trim();
-					return (
+					let result =
 						data.slice(0, callout.from) +
 						plainContent +
-						data.slice(callout.to)
-					);
+						data.slice(callout.to);
+
+					// For ideation: also strip the @agent prompt line
+					if (calloutType === "ideation") {
+						const tag = this.settings.agentTag;
+						const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+						result = result.replace(
+							new RegExp("^[^\\n]*" + escaped + "[^\\n]*\\n?", "m"),
+							""
+						);
+					}
+					return result;
 				} else {
 					let start = callout.from;
 					let end = callout.to;
@@ -488,7 +628,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			this.settings.topKPerCompartment
 		);
 
-		// Check if any results have already been proposed
+		// Collect all candidate paths and find the best unproposed one
 		const allPaths = new Set([
 			...results.title.map((r) => r.path),
 			...results.tags.map((r) => r.path),
@@ -496,64 +636,138 @@ export default class SecondThoughtsPlugin extends Plugin {
 			...results.content.map((r) => r.path),
 		]);
 
-		// Skip if all top results have already been proposed
 		const unproposed = [...allPaths].filter(
 			(p) => !shadow.proposed.includes(p)
 		);
 		if (unproposed.length === 0) {
-			console.log(`Second Thoughts: all candidates already proposed for ${file.path}`);
+			console.log(
+				`Second Thoughts: all candidates already proposed for ${file.path}`
+			);
 			return;
 		}
 
+		// Pick the top unproposed candidate by content similarity
+		const ranked = unproposed
+			.map((p) => {
+				const s = this.index.get(p);
+				if (!s?.content?.length) return { path: p, score: 0 };
+				return {
+					path: p,
+					score: cosineSimilarity(shadow.content, s.content),
+				};
+			})
+			.sort((a, b) => b.score - a.score);
+
+		const bestTarget = ranked[0].path;
+
 		const noteContent = await this.app.vault.read(file);
 
-		const callout = await generateSystem1Callout(
+		// Generate a plain-text reason via LLM
+		const proposal = await generateFootnoteReason(
 			noteContent,
 			file.path,
-			results,
+			bestTarget,
 			this.settings.apiKey,
 			this.app
 		);
 
-		if (!callout) {
-			console.log(`Second Thoughts: LLM returned no connection for ${file.path}`);
+		if (!proposal) {
+			console.log(
+				`Second Thoughts: LLM returned no footnote for ${file.path}`
+			);
 			return;
 		}
 
-		// Final idle re-check + atomic write
+		// Final idle re-check
 		if (this.activeFilePath === file.path) {
 			return;
 		}
+
+		// Find the best paragraph to attach the footnote to
+		const targetShadow = this.index.get(bestTarget);
 
 		this.ownWrites.add(file.path);
 		await this.app.vault.process(file, (data) => {
 			if (this.activeFilePath === file.path) {
 				return data;
 			}
-			// Insert after the first heading line (top of file)
+
+			const id = nextFootnoteId(data);
+			const { ref, def } = formatFootnote(
+				id,
+				proposal.targetName,
+				proposal.reason
+			);
+
+			// Find the best paragraph to place the reference
 			const lines = data.split("\n");
-			let insertAfter = 0;
+			const paragraphs: { endLine: number; text: string }[] = [];
+			let paraStart = -1;
+
 			for (let i = 0; i < lines.length; i++) {
-				if (lines[i].startsWith("#")) {
-					insertAfter = i;
-					break;
+				const blank = lines[i].trim() === "";
+				const isHeading = lines[i].startsWith("#");
+				const isTag = lines[i].match(/^#\w/);
+				const isMeta =
+					lines[i].startsWith("[^") || lines[i].startsWith("---");
+
+				if (!blank && !isHeading && !isMeta && !isTag) {
+					if (paraStart === -1) paraStart = i;
+				} else if (paraStart !== -1) {
+					paragraphs.push({
+						endLine: i - 1,
+						text: lines.slice(paraStart, i).join("\n"),
+					});
+					paraStart = -1;
 				}
 			}
-			// Find end of the heading's trailing blank lines
-			let pos = insertAfter + 1;
-			while (pos < lines.length && lines[pos].trim() === "") {
-				pos++;
+			if (paraStart !== -1) {
+				paragraphs.push({
+					endLine: lines.length - 1,
+					text: lines.slice(paraStart).join("\n"),
+				});
 			}
-			lines.splice(pos, 0, "", callout, "");
-			return lines.join("\n");
+
+			// Pick the paragraph most similar to the target note's content
+			let bestPara = paragraphs.length - 1;
+			if (targetShadow?.content?.length && paragraphs.length > 1) {
+				// Simple heuristic: pick the paragraph that shares the most
+				// keywords with the target note's title
+				const targetTitle = proposal.targetName.toLowerCase();
+				let bestScore = -1;
+				for (let i = 0; i < paragraphs.length; i++) {
+					const pText = paragraphs[i].text.toLowerCase();
+					// Score: count target title words found in paragraph
+					const words = targetTitle.split(/\s+/);
+					const score = words.filter((w) =>
+						pText.includes(w)
+					).length;
+					if (score > bestScore) {
+						bestScore = score;
+						bestPara = i;
+					}
+				}
+			}
+
+			if (paragraphs.length === 0) {
+				// No paragraphs found — append at end
+				return data.trimEnd() + ref + "\n\n" + def + "\n";
+			}
+
+			// Insert reference at end of best paragraph's last line
+			const insertLine = paragraphs[bestPara].endLine;
+			lines[insertLine] = lines[insertLine] + ref;
+
+			// Append definition at bottom of file
+			const result = lines.join("\n").trimEnd() + "\n\n" + def + "\n";
+			return result;
 		});
 
-		// Track proposed targets in shadow file
-		const proposedPaths = [...allPaths];
-		shadow.proposed = [...new Set([...shadow.proposed, ...proposedPaths])];
+		// Track proposed target
+		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
 		await saveShadowFile(this.app, file.path, shadow);
 
-		console.log(`Second Thoughts: proposed connection for ${file.path}`);
+		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
 	}
 
 	private async runSystem2(file: TFile): Promise<void> {

@@ -255,7 +255,8 @@ function formatResultSections(results: RetrievalResults, app: App): string {
 
 async function callLLM(
 	prompt: string,
-	apiKey: string
+	apiKey: string,
+	maxTokens = 500
 ): Promise<string | null> {
 	const response = await requestUrl({
 		url: "https://api.openai.com/v1/chat/completions",
@@ -268,14 +269,63 @@ async function callLLM(
 			model: "gpt-4o-mini",
 			messages: [{ role: "user", content: prompt }],
 			temperature: 0.7,
-			max_tokens: 500,
+			max_tokens: maxTokens,
 		}),
 	});
 
 	return response.json.choices?.[0]?.message?.content?.trim() || null;
 }
 
-// --- System 1 ---
+// --- System 1: Footnotes ---
+
+export interface FootnoteProposal {
+	targetPath: string;
+	targetName: string;
+	reason: string;
+}
+
+function buildFootnotePrompt(
+	noteContent: string,
+	notePath: string,
+	targetName: string,
+	targetContent: string
+): string {
+	return `You are analysing connections between notes in a personal knowledge base.
+
+Source note (${notePath}):
+---
+${noteContent}
+---
+
+Related note: "${targetName}"
+---
+${targetContent}
+---
+
+In ONE short sentence (under 30 words), explain why these notes are related. Be specific. No formatting or markdown — just the plain text reason.`;
+}
+
+export async function generateFootnoteReason(
+	noteContent: string,
+	notePath: string,
+	targetPath: string,
+	apiKey: string,
+	app: App
+): Promise<FootnoteProposal | null> {
+	const targetFile = app.vault.getAbstractFileByPath(targetPath);
+	if (!(targetFile instanceof TFile)) return null;
+
+	const targetContent = await app.vault.read(targetFile);
+	const targetName = targetFile.basename;
+
+	const prompt = buildFootnotePrompt(noteContent, notePath, targetName, targetContent);
+	const reason = await callLLM(prompt, apiKey, 80);
+	if (!reason) return null;
+
+	return { targetPath, targetName, reason: reason.replace(/\n/g, " ").trim() };
+}
+
+// --- System 1: Legacy callout (kept for migration) ---
 
 function buildSystem1Prompt(
 	noteContent: string,
