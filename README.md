@@ -1,32 +1,33 @@
 # Second Thoughts
 
-An Obsidian plugin that surfaces AI-generated connections and ideas from your vault. Two independent systems propose contextual links and synthesised responses, presented as inline callouts you can accept or reject.
+An Obsidian plugin that surfaces AI-generated connections and ideas from your vault. Two independent systems discover relationships and synthesise responses, presented as native footnotes and inline callouts.
 
 ## Features
 
-### System 1 — Relational Connector
+### Footnotes — Automated Connections
 
-Runs automatically in the background. When you stop editing a note, the plugin analyses its content against nearby notes (by link distance) and proposes connections you may have missed.
+Runs automatically in the background. When you stop editing a note and navigate away, the plugin analyses its content against nearby notes (by link distance) and proposes connections as native Obsidian footnotes.
 
-Proposals appear as `[!connection]` callouts with reasoning explaining why the link is relevant.
+A superscript reference is placed at the most relevant paragraph, with the footnote definition at the bottom:
 
-### System 2 — Ideation Agent
+```markdown
+Sperm whales are the deepest-diving mammals.[^st-1]
+
+---
+
+[^st-1]: See [[Whale Diving]] — both notes explore physiological
+adaptations enabling cetaceans to withstand extreme depth. *(Second Thoughts)*
+```
+
+The `*(Second Thoughts)*` marker identifies AI-generated footnotes. Remove it when you've reviewed the connection, or delete the footnote entirely if it's not useful.
+
+A notification appears when a footnote is added (e.g. `Sperm Whales → [[Whale Diving]]`).
+
+### Ideation — On-Demand Synthesis
 
 Triggered explicitly by writing `@agent` in a note followed by a question or prompt. The plugin synthesises knowledge from across your vault to generate a response.
 
-Responses appear as `[!ideation]` callouts with cited sources from your notes.
-
-### Accept / Reject
-
-Each proposal includes inline **Accept** and **Reject** buttons:
-
-- **Accept** strips the callout formatting and keeps the content as plain text
-- **Reject** removes the entire callout block
-
-Commands are also available in the command palette:
-- `Second Thoughts: Accept proposal at cursor`
-- `Second Thoughts: Reject proposal at cursor`
-- `Second Thoughts: Reject all proposals`
+Responses appear as `[!ideation]` callouts with cited sources from your notes. Accept/Reject buttons appear in reading mode.
 
 ## Requirements
 
@@ -53,21 +54,21 @@ Commands are also available in the command palette:
 |---------|---------|-------------|
 | API Key | — | Your OpenAI API key (required) |
 | Idle Debounce | 5 min | Time after last edit before processing a note |
-| System 1 Hop Depth | 3 | How many link hops to search for related notes |
-| System 2 Scope | folder | Default scope for ideation queries (`folder` or `vault`) |
+| Hop Depth | 3 | How many link hops to search for related notes |
+| Ideation Scope | folder | Default scope for ideation queries (`folder` or `vault`) |
 | Top-K per Compartment | 5 | Number of similar results to retrieve per category |
 | Excluded Folders | — | Folders to exclude from analysis |
 | Excluded Tags | — | Tags to exclude from analysis |
-| Agent Tag | `@agent` | Marker that triggers System 2 |
+| Agent Tag | `@agent` | Marker that triggers ideation |
 
 ## How It Works
 
 1. **Idle detection** — The plugin watches for file modifications and starts a debounce timer. When you stop editing and navigate away, processing begins.
 2. **Embedding** — Note content is split into four compartments (title, tags, links, content) and embedded via OpenAI's `text-embedding-3-small` model. Embeddings are cached as shadow files.
 3. **Retrieval** — Candidate notes are found via link-distance BFS, then ranked by cosine similarity across all compartments.
-4. **Generation** — An LLM synthesises the retrieved context into a proposal, which is appended as a callout.
+4. **Footnote generation** — An LLM produces a short reason explaining the connection. The plugin formats it as a native Obsidian footnote and inserts it at the most relevant paragraph.
 
-All file writes use Obsidian's atomic `vault.process()` API. All network calls use `requestUrl()`. The plugin never modifies your existing content — proposals are always additive.
+All file writes use Obsidian's atomic `vault.process()` API. All network calls use `requestUrl()`. The plugin never modifies your existing content — footnotes and callouts are always additive.
 
 ## Development
 
@@ -93,7 +94,7 @@ npm test          # Run unit tests (33 tests, pure functions)
 npm run e2e       # Run E2E tests against seed vault (requires Obsidian running)
 ```
 
-The E2E suite auto-opens the vault, bootstraps embeddings for 17 whale-themed notes, and tests the full pipeline: embedding, System 1/2 proposals, deduplication, accept/reject.
+The E2E suite auto-opens the vault, bootstraps embeddings for 17 whale-themed notes, and tests the full pipeline: embedding, footnote generation, deduplication, and ideation.
 
 ## Privacy
 

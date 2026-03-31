@@ -4,26 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-An Obsidian community plugin (TypeScript) that augments notes with AI-generated proposals — relational links and tagged agent responses.
+An Obsidian community plugin (TypeScript) that augments notes with AI-generated footnotes (automated connections) and ideation callouts (on-demand synthesis).
 
 ## Status
 
-All 9 implementation phases complete. E2E tests passing (10/10). Ready for real-vault testing and community submission.
+Footnotes feature implemented on `feature/footnotes` branch. E2E tests passing (10/10). Ideation system still uses `[!ideation]` callouts — pending refactor to modal workflow.
 
 ## Key Files
 
-- `src/main.ts` — Plugin entry point. Idle detection, bootstrap, System 1/2 orchestration, accept/reject commands.
+- `src/main.ts` — Plugin entry point. Idle detection, bootstrap, footnote pipeline, ideation orchestration, post-processor for callout buttons.
 - `src/embedding.ts` — Compartment extraction, OpenAI embedding calls, shadow file I/O, runtime index.
-- `src/retrieval.ts` — BFS scope filtering, cosine similarity, LLM prompt generation, callout formatting.
-- `src/decorations.ts` — CM6 StateField for inline accept/reject buttons on callouts.
+- `src/retrieval.ts` — BFS scope filtering, cosine similarity, footnote reason generation, ideation callout generation.
+- `src/decorations.ts` — Callout detection (`findCallouts`), footnote utilities (`nextFootnoteId`, `formatFootnote`, `stripFootnoteMarker`, `removeFootnote`).
 - `src/settings.ts` — Settings interface, defaults, and PluginSettingTab.
-- `e2e.sh` — Automated E2E test suite using Obsidian CLI. Tests all 8 features against the seed vault.
+- `e2e.sh` — Automated E2E test suite using Obsidian CLI against the seed vault.
 - `seed-vault/` — Whale-themed test vault with 17 interconnected notes. Used by E2E and build.
 - `.env` — Local OpenAI API key (`OPENAI_API_KEY=sk-...`). Injected into seed vault by build and E2E scripts.
 
 ## Key Technical Decisions
 
-- **CM6 decorations** for inline accept/reject buttons on callouts (StateField, not ViewPlugin). Import `@codemirror/view` and `@codemirror/state` from Obsidian — never bundle your own CM6 packages.
+- **Native Obsidian footnotes** (`[^st-N]`) for connection proposals. `*(Second Thoughts)*` marker identifies AI-generated footnotes. `Notice` shown on creation.
+- **`registerMarkdownPostProcessor`** for ideation callout Accept/Reject buttons (reading mode only).
+- **Paragraph-level placement** — footnote references inserted at the most semantically relevant paragraph, not end of file.
+- **Dual deduplication** — shadow file `proposed` array + file-content scan inside `vault.process()`.
 - **`vault.process()`** for all file writes (atomic). Never `vault.append()` or `vault.modify()`.
 - **`requestUrl()`** for all network calls (not `fetch()`). Community review requirement.
 - **Shadow files** (one JSON per note) for embedding storage. Not `data.json`.
@@ -37,4 +40,3 @@ npm run build     # Build + deploy to seed-vault + inject .env API key
 npm test          # 33 unit tests (pure functions, no Obsidian mocking)
 npm run e2e       # 10 E2E tests via Obsidian CLI (requires Obsidian running)
 ```
-
