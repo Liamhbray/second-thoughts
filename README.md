@@ -85,7 +85,7 @@ echo "OPENAI_API_KEY=sk-..." > .env
 
 The build and E2E scripts inject this into the seed vault settings automatically.
 
-Open the `seed-vault` folder as a vault in Obsidian (one-time setup), then enable the plugin in **Settings > Community Plugins**.
+First run only: open the `seed-vault` folder as a vault in Obsidian (**Open another vault > Open folder as vault**) and enable the plugin in **Settings > Community Plugins**. After that, the E2E script opens the vault automatically.
 
 ```bash
 npm run build     # Build and deploy to seed vault
