@@ -562,6 +562,12 @@ export default class SecondThoughtsPlugin extends Plugin {
 				return data;
 			}
 
+			// Guard: skip if this target is already in a footnote definition
+			if (data.includes(`[[${proposal.targetName}]]`) &&
+				data.match(new RegExp(`^\\[\\^st-\\d+\\]:.*\\[\\[${proposal.targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\]`, "m"))) {
+				return data;
+			}
+
 			const id = nextFootnoteId(data);
 			const { ref, def } = formatFootnote(
 				id,
