@@ -1,11 +1,4 @@
-import {
-	EditorView,
-	ViewUpdate,
-	WidgetType,
-	Decoration,
-	DecorationSet,
-} from "@codemirror/view";
-import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
+import { StateEffect } from "@codemirror/state";
 
 // --- Effects (consumed by Phase 7b to trigger vault.process) ---
 
@@ -50,136 +43,70 @@ function findCallouts(text: string): CalloutRange[] {
 	return callouts;
 }
 
-// --- Widget ---
-
-class CalloutButtonWidget extends WidgetType {
-	constructor(
-		readonly calloutType: "connection" | "ideation",
-		readonly from: number,
-		readonly to: number
-	) {
-		super();
-	}
-
-	toDOM(view: EditorView): HTMLElement {
-		const container = document.createElement("span");
-		container.className = "second-thoughts-callout-buttons";
-		container.style.cssText =
-			"display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;";
-
-		const acceptBtn = document.createElement("button");
-		acceptBtn.textContent = "✓ Accept";
-		acceptBtn.className = "second-thoughts-accept-btn";
-		acceptBtn.style.cssText =
-			"font-size: 11px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"background: var(--background-secondary); color: var(--text-normal);";
-		acceptBtn.addEventListener("click", (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			view.dispatch({
-				effects: acceptCallout.of({ from: this.from, to: this.to }),
-			});
-		});
-
-		const rejectBtn = document.createElement("button");
-		rejectBtn.textContent = "✗ Reject";
-		rejectBtn.className = "second-thoughts-reject-btn";
-		rejectBtn.style.cssText =
-			"font-size: 11px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"background: var(--background-secondary); color: var(--text-normal);";
-		rejectBtn.addEventListener("click", (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			view.dispatch({
-				effects: rejectCallout.of({ from: this.from, to: this.to }),
-			});
-		});
-
-		container.appendChild(acceptBtn);
-		container.appendChild(rejectBtn);
-		return container;
-	}
-
-	eq(other: CalloutButtonWidget): boolean {
-		return (
-			this.calloutType === other.calloutType &&
-			this.from === other.from &&
-			this.to === other.to
-		);
-	}
-
-	ignoreEvent(): boolean {
-		return false;
-	}
-}
-
-// --- StateField ---
-
-function buildDecorations(text: string): DecorationSet {
-	const builder = new RangeSetBuilder<Decoration>();
-	const callouts = findCallouts(text);
-
-	for (const callout of callouts) {
-		// Place widget at end of the header line `> [!type]`
-		const firstNewline = text.indexOf("\n", callout.from);
-		const widgetPos =
-			firstNewline !== -1 && firstNewline <= callout.to
-				? firstNewline
-				: callout.to;
-
-		builder.add(
-			widgetPos,
-			widgetPos,
-			Decoration.widget({
-				widget: new CalloutButtonWidget(
-					callout.type,
-					callout.from,
-					callout.to
-				),
-				side: 1,
-			})
-		);
-	}
-
-	return builder.finish();
-}
-
 export { findCallouts };
 
-export const calloutDecorationField = StateField.define<DecorationSet>({
-	create(state) {
-		return buildDecorations(state.doc.toString());
-	},
+// --- Footnote utilities ---
 
-	update(decorations, tr) {
-		if (tr.docChanged) {
-			return buildDecorations(tr.newDoc.toString());
-		}
-		return decorations;
-	},
+const ST_MARKER = "*(Second Thoughts)*";
+const ST_PREFIX = "st-";
 
-	provide(field) {
-		return EditorView.decorations.from(field);
-	},
-});
+/**
+ * Find the next available `[^st-N]` footnote ID in the given text.
+ */
+export function nextFootnoteId(text: string): string {
+	let max = 0;
+	const re = /\[\^st-(\d+)\]/g;
+	let m;
+	while ((m = re.exec(text)) !== null) {
+		const n = parseInt(m[1], 10);
+		if (n > max) max = n;
+	}
+	return `st-${max + 1}`;
+}
 
-// --- Effect listener (bridges CM6 effects → plugin callbacks) ---
-
-export function createCalloutEffectListener(
-	onAccept: (from: number, to: number) => void,
-	onReject: (from: number, to: number) => void
-): (update: ViewUpdate) => void {
-	return (update: ViewUpdate) => {
-		for (const tr of update.transactions) {
-			for (const effect of tr.effects) {
-				if (effect.is(acceptCallout)) {
-					onAccept(effect.value.from, effect.value.to);
-				} else if (effect.is(rejectCallout)) {
-					onReject(effect.value.from, effect.value.to);
-				}
-			}
-		}
+/**
+ * Build a footnote reference and definition from a proposal.
+ */
+export function formatFootnote(
+	id: string,
+	targetName: string,
+	reason: string
+): { ref: string; def: string } {
+	return {
+		ref: `[^${id}]`,
+		def: `[^${id}]: See [[${targetName}]] — ${reason} ${ST_MARKER}`,
 	};
+}
+
+/**
+ * Check if a footnote definition line contains the Second Thoughts marker.
+ */
+export function isSecondThoughtsFootnote(line: string): boolean {
+	return line.includes(ST_MARKER);
+}
+
+/**
+ * Strip the Second Thoughts marker from a footnote definition.
+ */
+export function stripFootnoteMarker(text: string, id: string): string {
+	const defRe = new RegExp(
+		`(\\[\\^${id}\\]:.*?)\\s*\\*\\(Second Thoughts\\)\\*`,
+		"m"
+	);
+	return text.replace(defRe, "$1");
+}
+
+/**
+ * Remove a footnote entirely — both inline reference and definition.
+ */
+export function removeFootnote(text: string, id: string): string {
+	// Remove inline references
+	const refRe = new RegExp(`\\[\\^${id}\\](?!:)`, "g");
+	let result = text.replace(refRe, "");
+
+	// Remove definition line
+	const defRe = new RegExp(`^\\[\\^${id}\\]:.*\\n?`, "m");
+	result = result.replace(defRe, "");
+
+	return result;
 }

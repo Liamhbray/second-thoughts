@@ -109,13 +109,27 @@ trigger_modify() {
   aeval_ob "const f = app.vault.getFileByPath('$path'); const c = await app.vault.read(f); await app.vault.modify(f, c + '\\n'); return 'ok';" > /dev/null 2>&1
 }
 
-# Strip all callouts from a file, restoring it to its original state.
+# Strip all callouts from a file.
 strip_callouts() {
   local path="$1"
   aeval_ob "
     const f = app.vault.getFileByPath('$path');
     await app.vault.process(f, (data) => {
       return data.replace(/\\n?> \\[!(connection|ideation)\\][^]*?(?=\\n[^>]|$)/gm, '').trimEnd() + '\\n';
+    });
+    return 'stripped';
+  " > /dev/null 2>&1
+}
+
+# Strip all Second Thoughts footnotes from a file.
+strip_footnotes() {
+  local path="$1"
+  aeval_ob "
+    const f = app.vault.getFileByPath('$path');
+    await app.vault.process(f, (data) => {
+      let r = data.replace(/\\[\\^st-\\d+\\](?!:)/g, '');
+      r = r.replace(/^\\[\\^st-\\d+\\]:.*\\n?/gm, '');
+      return r.trimEnd() + '\\n';
     });
     return 'stripped';
   " > /dev/null 2>&1
@@ -191,7 +205,9 @@ fi
 
 strip_callouts "$SYSTEM1_NOTE"
 strip_callouts "$SYSTEM2_NOTE"
-echo "  Stripped leftover callouts from test notes"
+strip_footnotes "$SYSTEM1_NOTE"
+strip_footnotes "$SYSTEM2_NOTE"
+echo "  Stripped leftover callouts and footnotes from test notes"
 
 # Reload plugin for clean state
 obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
@@ -223,16 +239,16 @@ wait_for "System 2 note indexed" \
   "$P.getDebugState().hasEntry('$SYSTEM2_NOTE')" \
   "$TIMEOUT"
 
-# --- Test 3: System 1 — Connection Proposal ---
+# --- Test 3: System 1 — Footnote Proposal ---
 
 echo ""
-echo "=== Test 3: System 1 ==="
+echo "=== Test 3: System 1 (Footnotes) ==="
 
 trigger_modify "$SYSTEM1_NOTE"
 switch_away
 
-await_for "Blue Whales gets [!connection] callout" \
-  "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" \
+await_for "Blue Whales gets footnote" \
+  "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[^st-')" \
   "$TIMEOUT" || true
 
 # --- Test 4: System 2 — @agent Response ---
@@ -252,14 +268,14 @@ await_for "Moby-Dick gets [!ideation] callout" \
 echo ""
 echo "=== Test 5: Deduplication ==="
 
-count_before=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\\\[!connection\\\\]/g)||[]).length")
+count_before=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\[\\\\^st-\\d+\\]:/g)||[]).length")
 
 trigger_modify "$SYSTEM1_NOTE"
 switch_away
 sleep 15
 
-count_after=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\\\[!connection\\\\]/g)||[]).length")
-assert_eq "No duplicate callout on Blue Whales" "$count_after" "$count_before"
+count_after=$(aeval_ob "return ((await app.vault.adapter.read('$SYSTEM1_NOTE')).match(/\\[\\\\^st-\\d+\\]:/g)||[]).length")
+assert_eq "No duplicate footnote on Blue Whales" "$count_after" "$count_before"
 
 # --- Test 6: ownWrites guard ---
 
@@ -269,71 +285,36 @@ echo "=== Test 6: ownWrites ==="
 assert_true "No idle timer after own write" \
   "!$P.getDebugState().idleTimerPaths.includes('$SYSTEM1_NOTE')"
 
-# --- Test 7: Accept ---
+# --- Test 7: Footnote has AI marker ---
 
 echo ""
-echo "=== Test 7: Accept ==="
+echo "=== Test 7: AI Marker ==="
 
-has_callout=$(aeval_ob "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" || echo "false")
-if [ "$has_callout" = "true" ]; then
-  accept_result=$(aeval_ob "
-    const f = app.vault.getFileByPath('$SYSTEM1_NOTE');
-    if (!f) return 'ERR: file not found';
-    await app.vault.process(f, (data) => {
-      const re = /^> \\[!(connection|ideation)\\].*(?:\\n> .*)*(?:\\n)?/m;
-      const m = re.exec(data);
-      if (!m) return data;
-      const block = m[0];
-      const lines = block.split('\\n');
-      const content = lines.slice(1).map(l => l.replace(/^>\\s?/, '')).join('\\n').trim();
-      return data.slice(0, m.index) + content + data.slice(m.index + block.length);
-    });
-    return 'accepted';
-  ")
-  echo "  accept: $accept_result"
-  sleep 2
+assert_true "Footnote has *(Second Thoughts)* marker" \
+  "(async () => { return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*') })()"
 
-  await_for "Callout markers removed after accept" \
-    "return !(await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[!connection]')" \
-    10
-else
-  echo "  SKIP: No callout present to test accept (System 1 may not have fired)"
-fi
-
-# --- Test 8: Reject ---
+# --- Test 8: Ideation (System 2 — unchanged) ---
 
 echo ""
-echo "=== Test 8: Reject ==="
+echo "=== Test 8: Ideation ==="
 
-has_ideation=$(aeval_ob "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" || echo "false")
-if [ "$has_ideation" = "true" ]; then
-  aeval_ob "
-    const f = app.vault.getFileByPath('$SYSTEM2_NOTE');
-    await app.vault.process(f, (data) => {
-      const re = /\\n?> \\[!(connection|ideation)\\].*(?:\\n> .*)*\\n?/m;
-      const m = re.exec(data);
-      if (!m) return data;
-      return data.slice(0, m.index) + data.slice(m.index + m[0].length);
-    });
-    return 'rejected';
-  " > /dev/null 2>&1
-  sleep 2
+trigger_modify "$SYSTEM2_NOTE"
+switch_away
 
-  await_for "Callout block removed after reject" \
-    "return !(await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
-    10
-else
-  echo "  SKIP: No ideation callout present to test reject"
-fi
+await_for "Moby-Dick gets [!ideation] callout" \
+  "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
+  "$TIMEOUT" || true
 
 # --- Cleanup ---
 
 echo ""
 echo "=== Cleanup ==="
 
-# Restore seed notes to their original state (strip any remaining callouts)
+# Restore seed notes to their original state
 strip_callouts "$SYSTEM1_NOTE"
 strip_callouts "$SYSTEM2_NOTE"
+strip_footnotes "$SYSTEM1_NOTE"
+strip_footnotes "$SYSTEM2_NOTE"
 
 # Clear embeddings so next run starts fresh
 rm -f "$EMBED_DIR"/*.json

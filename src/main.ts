@@ -19,10 +19,12 @@ import {
 	retrieveSimilar,
 	generateSystem1Callout,
 	generateSystem2Callout,
+	generateFootnoteReason,
 	findAgentPrompt,
 	findAgentPromptEnd,
+	cosineSimilarity,
 } from "./retrieval";
-import { findCallouts } from "./decorations";
+import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -77,11 +79,12 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
+		// Ideation callout buttons (kept until ideas feature replaces them)
 		this.registerMarkdownPostProcessor((el, ctx) => {
-			const calloutEls = el.querySelectorAll<HTMLElement>(
-				'.callout[data-callout="connection"], .callout[data-callout="ideation"]'
+			const ideationEls = el.querySelectorAll<HTMLElement>(
+				'.callout[data-callout="ideation"]'
 			);
-			for (const calloutEl of calloutEls) {
+			for (const calloutEl of ideationEls) {
 				const titleEl = calloutEl.querySelector(".callout-title");
 				if (!titleEl) continue;
 
@@ -109,21 +112,18 @@ export default class SecondThoughtsPlugin extends Plugin {
 					"border: 1px solid var(--background-modifier-border); " +
 					"background: var(--background-secondary); color: var(--text-normal);";
 
-				const calloutType = calloutEl.getAttribute(
-					"data-callout"
-				) as string;
 				const filePath = ctx.sourcePath;
 
 				acceptBtn.addEventListener("click", (e) => {
 					e.preventDefault();
 					e.stopPropagation();
-					this.handleCalloutByType("accept", calloutType, filePath);
+					this.handleCalloutByType("accept", "ideation", filePath);
 				});
 
 				rejectBtn.addEventListener("click", (e) => {
 					e.preventDefault();
 					e.stopPropagation();
-					this.handleCalloutByType("reject", calloutType, filePath);
+					this.handleCalloutByType("reject", "ideation", filePath);
 				});
 
 				titleEl.appendChild(btnContainer);
@@ -360,11 +360,21 @@ export default class SecondThoughtsPlugin extends Plugin {
 						contentLines.push(lines[i].replace(/^>\s?/, ""));
 					}
 					const plainContent = contentLines.join("\n").trim();
-					return (
+					let result =
 						data.slice(0, callout.from) +
 						plainContent +
-						data.slice(callout.to)
-					);
+						data.slice(callout.to);
+
+					// For ideation: also strip the @agent prompt line
+					if (calloutType === "ideation") {
+						const tag = this.settings.agentTag;
+						const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+						result = result.replace(
+							new RegExp("^[^\\n]*" + escaped + "[^\\n]*\\n?", "m"),
+							""
+						);
+					}
+					return result;
 				} else {
 					let start = callout.from;
 					let end = callout.to;
@@ -488,7 +498,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			this.settings.topKPerCompartment
 		);
 
-		// Check if any results have already been proposed
+		// Collect all candidate paths and find the best unproposed one
 		const allPaths = new Set([
 			...results.title.map((r) => r.path),
 			...results.tags.map((r) => r.path),
@@ -496,64 +506,149 @@ export default class SecondThoughtsPlugin extends Plugin {
 			...results.content.map((r) => r.path),
 		]);
 
-		// Skip if all top results have already been proposed
 		const unproposed = [...allPaths].filter(
 			(p) => !shadow.proposed.includes(p)
 		);
 		if (unproposed.length === 0) {
-			console.log(`Second Thoughts: all candidates already proposed for ${file.path}`);
+			console.log(
+				`Second Thoughts: all candidates already proposed for ${file.path}`
+			);
 			return;
 		}
 
+		// Pick the top unproposed candidate by content similarity
+		const ranked = unproposed
+			.map((p) => {
+				const s = this.index.get(p);
+				if (!s?.content?.length) return { path: p, score: 0 };
+				return {
+					path: p,
+					score: cosineSimilarity(shadow.content, s.content),
+				};
+			})
+			.sort((a, b) => b.score - a.score);
+
+		const bestTarget = ranked[0].path;
+
 		const noteContent = await this.app.vault.read(file);
 
-		const callout = await generateSystem1Callout(
+		// Generate a plain-text reason via LLM
+		const proposal = await generateFootnoteReason(
 			noteContent,
 			file.path,
-			results,
+			bestTarget,
 			this.settings.apiKey,
 			this.app
 		);
 
-		if (!callout) {
-			console.log(`Second Thoughts: LLM returned no connection for ${file.path}`);
+		if (!proposal) {
+			console.log(
+				`Second Thoughts: LLM returned no footnote for ${file.path}`
+			);
 			return;
 		}
 
-		// Final idle re-check + atomic write
+		// Final idle re-check
 		if (this.activeFilePath === file.path) {
 			return;
 		}
+
+		// Find the best paragraph to attach the footnote to
+		const targetShadow = this.index.get(bestTarget);
 
 		this.ownWrites.add(file.path);
 		await this.app.vault.process(file, (data) => {
 			if (this.activeFilePath === file.path) {
 				return data;
 			}
-			// Insert after the first heading line (top of file)
+
+			// Guard: skip if this target is already in a footnote definition
+			if (data.includes(`[[${proposal.targetName}]]`) &&
+				data.match(new RegExp(`^\\[\\^st-\\d+\\]:.*\\[\\[${proposal.targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\]`, "m"))) {
+				return data;
+			}
+
+			const id = nextFootnoteId(data);
+			const { ref, def } = formatFootnote(
+				id,
+				proposal.targetName,
+				proposal.reason
+			);
+
+			// Find the best paragraph to place the reference
 			const lines = data.split("\n");
-			let insertAfter = 0;
+			const paragraphs: { endLine: number; text: string }[] = [];
+			let paraStart = -1;
+
 			for (let i = 0; i < lines.length; i++) {
-				if (lines[i].startsWith("#")) {
-					insertAfter = i;
-					break;
+				const blank = lines[i].trim() === "";
+				const isHeading = lines[i].startsWith("#");
+				const isTag = lines[i].match(/^#\w/);
+				const isMeta =
+					lines[i].startsWith("[^") || lines[i].startsWith("---");
+
+				if (!blank && !isHeading && !isMeta && !isTag) {
+					if (paraStart === -1) paraStart = i;
+				} else if (paraStart !== -1) {
+					paragraphs.push({
+						endLine: i - 1,
+						text: lines.slice(paraStart, i).join("\n"),
+					});
+					paraStart = -1;
 				}
 			}
-			// Find end of the heading's trailing blank lines
-			let pos = insertAfter + 1;
-			while (pos < lines.length && lines[pos].trim() === "") {
-				pos++;
+			if (paraStart !== -1) {
+				paragraphs.push({
+					endLine: lines.length - 1,
+					text: lines.slice(paraStart).join("\n"),
+				});
 			}
-			lines.splice(pos, 0, "", callout, "");
-			return lines.join("\n");
+
+			// Pick the paragraph most similar to the target note's content
+			let bestPara = paragraphs.length - 1;
+			if (targetShadow?.content?.length && paragraphs.length > 1) {
+				// Simple heuristic: pick the paragraph that shares the most
+				// keywords with the target note's title
+				const targetTitle = proposal.targetName.toLowerCase();
+				let bestScore = -1;
+				for (let i = 0; i < paragraphs.length; i++) {
+					const pText = paragraphs[i].text.toLowerCase();
+					// Score: count target title words found in paragraph
+					const words = targetTitle.split(/\s+/);
+					const score = words.filter((w) =>
+						pText.includes(w)
+					).length;
+					if (score > bestScore) {
+						bestScore = score;
+						bestPara = i;
+					}
+				}
+			}
+
+			if (paragraphs.length === 0) {
+				// No paragraphs found — append at end
+				const hasFootnotes = /^\[\^/.test(data.split("\n").slice(-5).join("\n"));
+				const separator = hasFootnotes ? "" : "\n\n---";
+				return data.trimEnd() + ref + separator + "\n\n" + def + "\n";
+			}
+
+			// Insert reference at end of best paragraph's last line
+			const insertLine = paragraphs[bestPara].endLine;
+			lines[insertLine] = lines[insertLine] + ref;
+
+			// Append definition at bottom — add --- separator if first footnote
+			const joined = lines.join("\n").trimEnd();
+			const hasFootnotes = /^\[\^/m.test(joined.split("\n").slice(-5).join("\n"));
+			const separator = hasFootnotes ? "" : "\n\n---";
+			return joined + separator + "\n\n" + def + "\n";
 		});
 
-		// Track proposed targets in shadow file
-		const proposedPaths = [...allPaths];
-		shadow.proposed = [...new Set([...shadow.proposed, ...proposedPaths])];
+		// Track proposed target
+		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
 		await saveShadowFile(this.app, file.path, shadow);
 
-		console.log(`Second Thoughts: proposed connection for ${file.path}`);
+		new Notice(`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`);
+		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
 	}
 
 	private async runSystem2(file: TFile): Promise<void> {
