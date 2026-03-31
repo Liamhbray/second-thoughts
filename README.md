@@ -77,12 +77,13 @@ cd second-thoughts
 npm install
 ```
 
-Add your OpenAI API key to the seed vault settings:
+Add your OpenAI API key:
 
 ```bash
-# Edit seed-vault/.obsidian/plugins/second-thoughts/data.json
-# Set "apiKey" to your key
+echo "OPENAI_API_KEY=sk-..." > .env
 ```
+
+The build and E2E scripts inject this into the seed vault settings automatically.
 
 Open the `seed-vault` folder as a vault in Obsidian (one-time setup), then enable the plugin in **Settings > Community Plugins**.
 

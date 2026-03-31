@@ -163,6 +163,25 @@ echo "  Seed vault has $note_count notes"
 echo ""
 echo "=== Setup ==="
 
+# Inject API key from .env into plugin settings
+ENV_FILE="$(dirname "$0")/.env"
+DATA_JSON="$VAULT/.obsidian/plugins/$PLUGIN/data.json"
+if [ -f "$ENV_FILE" ]; then
+  API_KEY=$(grep '^OPENAI_API_KEY=' "$ENV_FILE" | cut -d= -f2-)
+  if [ -n "$API_KEY" ]; then
+    python3 -c "
+import json, sys
+with open('$DATA_JSON') as f: d = json.load(f)
+d['apiKey'] = '$API_KEY'
+with open('$DATA_JSON', 'w') as f: json.dump(d, f, indent=2)
+print('  done')
+" 2>/dev/null && echo "  Injected API key from .env"
+  fi
+elif [ "$(python3 -c "import json; print(json.load(open('$DATA_JSON'))['apiKey'])" 2>/dev/null)" = "" ]; then
+  echo "  ERROR: No .env file and no API key in data.json"
+  exit 1
+fi
+
 # Clear stale embeddings and callouts from prior runs
 EMBED_DIR="$VAULT/.obsidian/plugins/$PLUGIN/embeddings"
 if [ -d "$EMBED_DIR" ]; then
