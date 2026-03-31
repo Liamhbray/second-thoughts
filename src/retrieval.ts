@@ -99,6 +99,55 @@ export function filterCandidates(
 	return candidates;
 }
 
+export function filterCandidatesSystem2(
+	app: App,
+	sourcePath: string,
+	settings: SecondThoughtsSettings,
+	index: EmbeddingIndex
+): Set<string> {
+	const candidates = new Set<string>();
+
+	if (settings.system2ScopeDefault === "folder") {
+		// Folder scope: notes in same folder subtree
+		const folder = sourcePath.substring(0, sourcePath.lastIndexOf("/") + 1);
+		for (const [path] of index.allEntries()) {
+			if (path !== sourcePath && path.startsWith(folder)) {
+				candidates.add(path);
+			}
+		}
+	} else {
+		// Vault scope: all indexed notes
+		for (const [path] of index.allEntries()) {
+			if (path !== sourcePath) {
+				candidates.add(path);
+			}
+		}
+	}
+
+	// Apply same exclusions
+	for (const path of candidates) {
+		for (const folder of settings.excludedFolders) {
+			if (path.startsWith(folder + "/") || path.startsWith(folder)) {
+				candidates.delete(path);
+			}
+		}
+	}
+
+	if (settings.excludedTags.length > 0) {
+		for (const path of candidates) {
+			const file = app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) {
+				const cache = app.metadataCache.getFileCache(file);
+				if (cache && hasExcludedTag(cache, settings.excludedTags)) {
+					candidates.delete(path);
+				}
+			}
+		}
+	}
+
+	return candidates;
+}
+
 function hasExcludedTag(
 	cache: CachedMetadata,
 	excludedTags: string[]
@@ -177,7 +226,56 @@ export function retrieveSimilar(
 	};
 }
 
-// --- LLM generation ---
+// --- LLM generation (shared) ---
+
+function formatResults(
+	label: string,
+	items: SimilarityResult[],
+	app: App
+): string {
+	if (items.length === 0) return "";
+	const lines = items.map((r) => {
+		const file = app.vault.getAbstractFileByPath(r.path);
+		const name = file instanceof TFile ? file.basename : r.path;
+		return `  - [[${name}]] (score: ${r.score.toFixed(3)})`;
+	});
+	return `${label}:\n${lines.join("\n")}`;
+}
+
+function formatResultSections(results: RetrievalResults, app: App): string {
+	return [
+		formatResults("Matched on title similarity", results.title, app),
+		formatResults("Matched on tag patterns", results.tags, app),
+		formatResults("Matched on link overlap", results.links, app),
+		formatResults("Matched on content similarity", results.content, app),
+	]
+		.filter((s) => s.length > 0)
+		.join("\n\n");
+}
+
+async function callLLM(
+	prompt: string,
+	apiKey: string
+): Promise<string | null> {
+	const response = await requestUrl({
+		url: "https://api.openai.com/v1/chat/completions",
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: prompt }],
+			temperature: 0.7,
+			max_tokens: 500,
+		}),
+	});
+
+	return response.json.choices?.[0]?.message?.content?.trim() || null;
+}
+
+// --- System 1 ---
 
 function buildSystem1Prompt(
 	noteContent: string,
@@ -185,28 +283,6 @@ function buildSystem1Prompt(
 	results: RetrievalResults,
 	app: App
 ): string {
-	const formatResults = (
-		label: string,
-		items: SimilarityResult[]
-	): string => {
-		if (items.length === 0) return "";
-		const lines = items.map((r) => {
-			const file = app.vault.getAbstractFileByPath(r.path);
-			const name = file instanceof TFile ? file.basename : r.path;
-			return `  - [[${name}]] (score: ${r.score.toFixed(3)})`;
-		});
-		return `${label}:\n${lines.join("\n")}`;
-	};
-
-	const resultSections = [
-		formatResults("Matched on title similarity", results.title),
-		formatResults("Matched on tag patterns", results.tags),
-		formatResults("Matched on link overlap", results.links),
-		formatResults("Matched on content similarity", results.content),
-	]
-		.filter((s) => s.length > 0)
-		.join("\n\n");
-
 	return `You are an assistant that discovers connections between notes in a personal knowledge base. You will be given:
 1. The content of the current note
 2. A set of related notes found by semantic similarity, grouped by what matched (title, tags, links, content)
@@ -233,7 +309,7 @@ ${noteContent}
 
 Related notes found by similarity:
 
-${resultSections}`;
+${formatResultSections(results, app)}`;
 }
 
 export async function generateSystem1Callout(
@@ -244,30 +320,104 @@ export async function generateSystem1Callout(
 	app: App
 ): Promise<string | null> {
 	const prompt = buildSystem1Prompt(noteContent, notePath, results, app);
-
-	const response = await requestUrl({
-		url: "https://api.openai.com/v1/chat/completions",
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o-mini",
-			messages: [
-				{
-					role: "user",
-					content: prompt,
-				},
-			],
-			temperature: 0.7,
-			max_tokens: 500,
-		}),
-	});
-
-	const text = response.json.choices?.[0]?.message?.content?.trim();
+	const text = await callLLM(prompt, apiKey);
 	if (!text || !text.includes("[!connection]")) {
 		return null;
 	}
 	return text;
+}
+
+// --- System 2 ---
+
+function buildSystem2Prompt(
+	noteContent: string,
+	notePath: string,
+	agentPrompt: string,
+	results: RetrievalResults,
+	app: App
+): string {
+	return `You are an assistant that explores a user's questions and ideas using only knowledge from their personal notes. You will be given:
+1. The content of the current note
+2. The user's specific question or prompt (tagged with @agent)
+3. A set of related notes found by semantic similarity
+
+Your task: synthesise a response that addresses the user's prompt using ONLY material from their notes.
+
+Rules:
+- Output ONLY the callout block, nothing else
+- Use this exact format:
+
+> [!ideation]
+> Your synthesis with [[NoteNames]] woven naturally into the response — drawing connections across the user's own notes to address their question.
+
+- All wikilinks must reference real notes from the results
+- Synthesise across multiple notes where relevant
+- Draw only from the user's own notes — no external knowledge
+- Address the user's prompt directly
+- If no relevant material exists, output nothing
+
+User's prompt:
+---
+${agentPrompt}
+---
+
+Current note (${notePath}):
+---
+${noteContent}
+---
+
+Related notes found by similarity:
+
+${formatResultSections(results, app)}`;
+}
+
+export async function generateSystem2Callout(
+	noteContent: string,
+	notePath: string,
+	agentPrompt: string,
+	results: RetrievalResults,
+	apiKey: string,
+	app: App
+): Promise<string | null> {
+	const prompt = buildSystem2Prompt(noteContent, notePath, agentPrompt, results, app);
+	const text = await callLLM(prompt, apiKey);
+	if (!text || !text.includes("[!ideation]")) {
+		return null;
+	}
+	return text;
+}
+
+// --- @agent tag scanning ---
+
+export function findAgentPrompt(
+	content: string,
+	agentTag: string
+): string | null {
+	// Find the line containing the agent tag
+	const lines = content.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (lines[i].includes(agentTag)) {
+			// The prompt is the text around the tag — take the paragraph
+			const promptLines: string[] = [];
+			// Scan backwards for paragraph start
+			let start = i;
+			while (start > 0 && lines[start - 1].trim().length > 0) {
+				start--;
+			}
+			// Scan forwards for paragraph end
+			let end = i;
+			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
+				end++;
+			}
+			for (let j = start; j <= end; j++) {
+				promptLines.push(lines[j]);
+			}
+			// Remove the tag itself from the prompt text
+			return promptLines
+				.join("\n")
+				.replace(agentTag, "")
+				.trim();
+		}
+	}
+	return null;
 }

@@ -15,8 +15,11 @@ import {
 } from "./embedding";
 import {
 	filterCandidates,
+	filterCandidatesSystem2,
 	retrieveSimilar,
 	generateSystem1Callout,
+	generateSystem2Callout,
+	findAgentPrompt,
 } from "./retrieval";
 
 export default class SecondThoughtsPlugin extends Plugin {
@@ -116,6 +119,9 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.processing.add(file.path);
 		try {
 			await this.embedNote(file);
+
+			// System 2: runs at any coverage level
+			await this.runSystem2(file);
 
 			// System 1: only after bootstrap complete
 			if (this.bootstrapComplete) {
@@ -242,6 +248,61 @@ export default class SecondThoughtsPlugin extends Plugin {
 		await saveShadowFile(this.app, file.path, shadow);
 
 		console.log(`Second Thoughts: proposed connection for ${file.path}`);
+	}
+
+	private async runSystem2(file: TFile): Promise<void> {
+		const noteContent = await this.app.vault.read(file);
+		const agentPrompt = findAgentPrompt(noteContent, this.settings.agentTag);
+
+		if (!agentPrompt) {
+			return;
+		}
+
+		const shadow = this.index.get(file.path);
+		if (!shadow) return;
+
+		const candidates = filterCandidatesSystem2(
+			this.app,
+			file.path,
+			this.settings,
+			this.index
+		);
+
+		const results = retrieveSimilar(
+			shadow,
+			candidates,
+			this.index,
+			this.settings.topKPerCompartment
+		);
+
+		const callout = await generateSystem2Callout(
+			noteContent,
+			file.path,
+			agentPrompt,
+			results,
+			this.settings.apiKey,
+			this.app
+		);
+
+		if (!callout) {
+			console.log(`Second Thoughts: LLM returned no ideation for ${file.path}`);
+			return;
+		}
+
+		// Final idle re-check + atomic write
+		if (this.activeFilePath === file.path) {
+			return;
+		}
+
+		this.ownWrites.add(file.path);
+		await this.app.vault.process(file, (data) => {
+			if (this.activeFilePath === file.path) {
+				return data;
+			}
+			return data + "\n\n" + callout + "\n";
+		});
+
+		console.log(`Second Thoughts: proposed ideation for ${file.path}`);
 	}
 
 	private async bootstrap() {
