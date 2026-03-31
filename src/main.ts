@@ -24,13 +24,7 @@ import {
 	findAgentPromptEnd,
 	cosineSimilarity,
 } from "./retrieval";
-import {
-	findCallouts,
-	nextFootnoteId,
-	formatFootnote,
-	stripFootnoteMarker,
-	removeFootnote,
-} from "./decorations";
+import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -85,92 +79,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		// Footnote post-processor: add Keep/Remove buttons to AI-generated footnotes
+		// Ideation callout buttons (kept until ideas feature replaces them)
 		this.registerMarkdownPostProcessor((el, ctx) => {
-			const footnoteItems = el.querySelectorAll<HTMLElement>(
-				"section.footnotes ol li"
-			);
-			for (const li of footnoteItems) {
-				const emEl = li.querySelector("em");
-				if (!emEl || emEl.textContent !== "(Second Thoughts)") continue;
-
-				// Extract footnote ID from the backref link
-				const backref = li.querySelector<HTMLAnchorElement>(
-					".footnote-backref"
-				);
-				if (!backref) continue;
-				const href = backref.getAttribute("href") || "";
-				const refMatch = href.match(/fnref-(\d+)-/);
-				if (!refMatch) continue;
-
-				// Find the matching st-N id by scanning the source
-				const file = this.app.vault.getFileByPath(ctx.sourcePath);
-				if (!file) continue;
-
-				// Read data-footref from the inline sup to get the actual ID
-				const footrefEl = el.querySelector<HTMLElement>(
-					`[data-footref^="st-"]`
-				);
-				// Fallback: scan all st- footnotes in the section
-				const allFootrefs = el.querySelectorAll<HTMLElement>(
-					`[data-footref^="st-"]`
-				);
-				// Match by position — footnote items are in order
-				const liIndex = Array.from(
-					li.parentElement?.children || []
-				).indexOf(li);
-				const stFootrefs = Array.from(allFootrefs).filter((fr) =>
-					fr.getAttribute("data-footref")?.startsWith("st-")
-				);
-				const matchedRef = stFootrefs[liIndex];
-				const footnoteId =
-					matchedRef?.getAttribute("data-footref") || "";
-				if (!footnoteId) continue;
-
-				const btnContainer = createEl("span", {
-					cls: "second-thoughts-footnote-buttons",
-				});
-				btnContainer.style.cssText =
-					"display: inline-flex; gap: 4px; margin-left: 8px;";
-
-				const keepBtn = btnContainer.createEl("button", {
-					text: "Keep",
-					cls: "second-thoughts-keep-btn",
-				});
-				keepBtn.style.cssText =
-					"font-size: 10px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--interactive-accent); color: var(--text-on-accent);";
-
-				const removeBtn = btnContainer.createEl("button", {
-					text: "Remove",
-					cls: "second-thoughts-remove-btn",
-				});
-				removeBtn.style.cssText =
-					"font-size: 10px; padding: 1px 6px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--background-secondary); color: var(--text-normal);";
-
-				const filePath = ctx.sourcePath;
-				const fnId = footnoteId;
-
-				keepBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleFootnoteKeep(fnId, filePath);
-				});
-
-				removeBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleFootnoteRemove(fnId, filePath);
-				});
-
-				// Insert before the backref link
-				backref.before(btnContainer);
-			}
-
-			// Ideation callout buttons (kept until ideas feature replaces them)
 			const ideationEls = el.querySelectorAll<HTMLElement>(
 				'.callout[data-callout="ideation"]'
 			);
@@ -424,46 +334,6 @@ export default class SecondThoughtsPlugin extends Plugin {
 			}
 		}
 		return null;
-	}
-
-	private async handleFootnoteKeep(
-		footnoteId: string,
-		filePath: string
-	): Promise<void> {
-		const file = this.app.vault.getFileByPath(filePath);
-		if (!file) return;
-
-		try {
-			this.ownWrites.add(file.path);
-			await this.app.vault.process(file, (data) => {
-				return stripFootnoteMarker(data, footnoteId);
-			});
-			console.log(
-				`Second Thoughts: kept footnote [^${footnoteId}] in ${file.path}`
-			);
-		} catch (e) {
-			console.error("Second Thoughts: keep footnote failed", e);
-		}
-	}
-
-	private async handleFootnoteRemove(
-		footnoteId: string,
-		filePath: string
-	): Promise<void> {
-		const file = this.app.vault.getFileByPath(filePath);
-		if (!file) return;
-
-		try {
-			this.ownWrites.add(file.path);
-			await this.app.vault.process(file, (data) => {
-				return removeFootnote(data, footnoteId);
-			});
-			console.log(
-				`Second Thoughts: removed footnote [^${footnoteId}] from ${file.path}`
-			);
-		} catch (e) {
-			console.error("Second Thoughts: remove footnote failed", e);
-		}
 	}
 
 	private async handleCalloutByType(
@@ -767,6 +637,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
 		await saveShadowFile(this.app, file.path, shadow);
 
+		new Notice(`Second Thoughts: linked to [[${proposal.targetName}]]`);
 		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
 	}
 

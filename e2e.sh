@@ -285,71 +285,18 @@ echo "=== Test 6: ownWrites ==="
 assert_true "No idle timer after own write" \
   "!$P.getDebugState().idleTimerPaths.includes('$SYSTEM1_NOTE')"
 
-# --- Test 7: Keep (strip AI marker from footnote) ---
+# --- Test 7: Footnote has AI marker ---
 
 echo ""
-echo "=== Test 7: Keep ==="
+echo "=== Test 7: AI Marker ==="
 
-has_footnote=$(aeval_ob "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*')" || echo "false")
-if [ "$has_footnote" = "true" ]; then
-  keep_result=$(aeval_ob "
-    const f = app.vault.getFileByPath('$SYSTEM1_NOTE');
-    if (!f) return 'ERR: file not found';
-    await app.vault.process(f, (data) => {
-      return data.replace(/\\s*\\*\\(Second Thoughts\\)\\*/g, '');
-    });
-    return 'kept';
-  ")
-  echo "  keep: $keep_result"
-  sleep 2
+assert_true "Footnote has *(Second Thoughts)* marker" \
+  "(async () => { return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*') })()"
 
-  await_for "AI marker stripped from footnote" \
-    "return !(await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*')" \
-    10
-else
-  echo "  SKIP: No AI footnote present to test keep"
-fi
-
-# --- Test 8: Remove (delete footnote entirely) ---
+# --- Test 8: Ideation (System 2 — unchanged) ---
 
 echo ""
-echo "=== Test 8: Remove ==="
-
-# Re-trigger System 1 on a different note so we have a fresh footnote to remove
-trigger_modify "$SWITCH_NOTE"
-aeval_ob "await app.workspace.openLinkText('$SYSTEM1_NOTE', '', false)" > /dev/null 2>&1
-sleep 1
-
-await_for "Switch note gets footnote" \
-  "return (await app.vault.adapter.read('$SWITCH_NOTE')).includes('[^st-')" \
-  "$TIMEOUT" || true
-
-has_fn=$(aeval_ob "return (await app.vault.adapter.read('$SWITCH_NOTE')).includes('[^st-')" || echo "false")
-if [ "$has_fn" = "true" ]; then
-  remove_result=$(aeval_ob "
-    const f = app.vault.getFileByPath('$SWITCH_NOTE');
-    if (!f) return 'ERR: file not found';
-    await app.vault.process(f, (data) => {
-      let r = data.replace(/\\[\\^st-\\d+\\](?!:)/g, '');
-      r = r.replace(/^\\[\\^st-\\d+\\]:.*\\n?/gm, '');
-      return r;
-    });
-    return 'removed';
-  ")
-  echo "  remove: $remove_result"
-  sleep 2
-
-  await_for "Footnote removed from note" \
-    "return !(await app.vault.adapter.read('$SWITCH_NOTE')).includes('[^st-')" \
-    10
-else
-  echo "  SKIP: No footnote present to test remove"
-fi
-
-# --- Test 9: Ideation (System 2 — unchanged) ---
-
-echo ""
-echo "=== Test 9: Ideation ==="
+echo "=== Test 8: Ideation ==="
 
 trigger_modify "$SYSTEM2_NOTE"
 switch_away
@@ -368,7 +315,6 @@ strip_callouts "$SYSTEM1_NOTE"
 strip_callouts "$SYSTEM2_NOTE"
 strip_footnotes "$SYSTEM1_NOTE"
 strip_footnotes "$SYSTEM2_NOTE"
-strip_footnotes "$SWITCH_NOTE"
 
 # Clear embeddings so next run starts fresh
 rm -f "$EMBED_DIR"/*.json
