@@ -10,10 +10,14 @@ import {
 	embedCompartments,
 	saveShadowFile,
 	loadAllShadowFiles,
-	loadShadowFile,
 	hashPath,
 	ShadowFile,
 } from "./embedding";
+import {
+	filterCandidates,
+	retrieveSimilar,
+	generateSystem1Callout,
+} from "./retrieval";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -112,8 +116,13 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.processing.add(file.path);
 		try {
 			await this.embedNote(file);
+
+			// System 1: only after bootstrap complete
+			if (this.bootstrapComplete) {
+				await this.runSystem1(file);
+			}
 		} catch (e) {
-			console.error(`Second Thoughts: embedding failed for ${file.path}`, e);
+			console.error(`Second Thoughts: processing failed for ${file.path}`, e);
 		} finally {
 			this.processing.delete(file.path);
 		}
@@ -156,6 +165,83 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.index.set(file.path, shadow);
 
 		console.log(`Second Thoughts: embedded ${file.path}`);
+	}
+
+	private async runSystem1(file: TFile): Promise<void> {
+		const shadow = this.index.get(file.path);
+		if (!shadow) return;
+
+		const candidates = filterCandidates(
+			this.app,
+			file.path,
+			this.settings,
+			this.index
+		);
+
+		if (candidates.size === 0) {
+			console.log(`Second Thoughts: no candidates for ${file.path}`);
+			return;
+		}
+
+		const results = retrieveSimilar(
+			shadow,
+			candidates,
+			this.index,
+			this.settings.topKPerCompartment
+		);
+
+		// Check if any results have already been proposed
+		const allPaths = new Set([
+			...results.title.map((r) => r.path),
+			...results.tags.map((r) => r.path),
+			...results.links.map((r) => r.path),
+			...results.content.map((r) => r.path),
+		]);
+
+		// Skip if all top results have already been proposed
+		const unproposed = [...allPaths].filter(
+			(p) => !shadow.proposed.includes(p)
+		);
+		if (unproposed.length === 0) {
+			console.log(`Second Thoughts: all candidates already proposed for ${file.path}`);
+			return;
+		}
+
+		const noteContent = await this.app.vault.read(file);
+
+		const callout = await generateSystem1Callout(
+			noteContent,
+			file.path,
+			results,
+			this.settings.apiKey,
+			this.app
+		);
+
+		if (!callout) {
+			console.log(`Second Thoughts: LLM returned no connection for ${file.path}`);
+			return;
+		}
+
+		// Final idle re-check + atomic write
+		if (this.activeFilePath === file.path) {
+			return;
+		}
+
+		this.ownWrites.add(file.path);
+		await this.app.vault.process(file, (data) => {
+			// Final guard inside atomic callback
+			if (this.activeFilePath === file.path) {
+				return data;
+			}
+			return data + "\n\n" + callout + "\n";
+		});
+
+		// Track proposed targets in shadow file
+		const proposedPaths = [...allPaths];
+		shadow.proposed = [...new Set([...shadow.proposed, ...proposedPaths])];
+		await saveShadowFile(this.app, file.path, shadow);
+
+		console.log(`Second Thoughts: proposed connection for ${file.path}`);
 	}
 
 	private async bootstrap() {
