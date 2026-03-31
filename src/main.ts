@@ -9,6 +9,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
 	private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 	private activeFilePath: string | null = null;
+	private ownWrites: Set<string> = new Set();
 
 	async onload() {
 		await this.loadSettings();
@@ -17,6 +18,9 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on("modify", (file: TAbstractFile) => {
 				if (file instanceof TFile && file.extension === "md") {
+					if (this.ownWrites.delete(file.path)) {
+						return;
+					}
 					this.resetIdleTimer(file);
 				}
 			})
