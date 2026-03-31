@@ -641,7 +641,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
 		await saveShadowFile(this.app, file.path, shadow);
 
-		new Notice(`Second Thoughts: linked to [[${proposal.targetName}]]`);
+		new Notice(`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`);
 		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
 	}
 
