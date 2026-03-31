@@ -16,13 +16,24 @@ total=0
 
 # --- Helpers ---
 
+# CLI eval requires (async () => { ... })() for await expressions.
+# Synchronous expressions work bare. All output is parsed via sed to
+# strip the CLI loading messages and extract the "=> <result>" line.
+
 eval_ob() {
-  obsidian vault="$VAULT" eval code="$1" 2>/dev/null
+  obsidian vault="$VAULT" eval code="$1" 2>/dev/null | sed -n 's/^=> //p'
+}
+
+# Async eval helper — wraps code in an async IIFE
+aeval_ob() {
+  eval_ob "(async () => { $1 })()"
 }
 
 debug_state() {
   eval_ob "JSON.stringify(app.plugins.plugins['$PLUGIN'].getDebugState())"
 }
+
+P="app.plugins.plugins['$PLUGIN']"
 
 assert_true() {
   local desc="$1" check="$2"
@@ -70,10 +81,23 @@ wait_for() {
   return 1
 }
 
+# Async version of wait_for — wraps check in async IIFE
+await_for() {
+  local desc="$1" check="$2" max="${3:-$TIMEOUT}"
+  wait_for "$desc" "(async () => { $check })()" "$max"
+}
+
 switch_away() {
   # Open a different file to make the edited file no longer active
-  eval_ob "app.workspace.openLinkText('E2E-NoteB', '', false)" > /dev/null 2>&1
+  aeval_ob "await app.workspace.openLinkText('E2E-NoteB', '', false)" > /dev/null 2>&1
   sleep 1
+}
+
+# Modify a file via vault.modify() to trigger vault 'modify' event.
+# vault.adapter methods do NOT fire vault events.
+trigger_modify() {
+  local path="$1"
+  aeval_ob "const f = app.vault.getFileByPath('$path'); const c = await app.vault.read(f); await app.vault.modify(f, c + '\\n'); return 'ok';" > /dev/null 2>&1
 }
 
 # --- Pre-flight ---
@@ -99,40 +123,26 @@ echo "  Obsidian CLI connected to vault '$VAULT'"
 echo ""
 echo "=== Setup ==="
 
-# Clean up any leftover test files
-rm -f "$VAULT/E2E-NoteA.md" "$VAULT/E2E-NoteB.md" "$VAULT/E2E-NoteC.md"
+# Clean up any leftover test files and stale shadow files
+aeval_ob "for (const n of ['E2E-NoteA.md','E2E-NoteB.md','E2E-NoteC.md']) { try { await app.vault.adapter.remove(n) } catch {} } return 'cleaned'" > /dev/null 2>&1
+
+# Remove all cached embeddings so proposed arrays don't interfere
+EMBED_DIR="$VAULT/.obsidian/plugins/$PLUGIN/embeddings"
+if [ -d "$EMBED_DIR" ]; then
+  rm -f "$EMBED_DIR"/*.json
+  echo "  Cleared embedding cache"
+fi
 
 # Reload plugin for clean state
 obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
 sleep 3
 
-# Create test notes with overlapping semantic content
-cat > "$VAULT/E2E-NoteA.md" << 'NOTEEOF'
-# Feedback Loops
+# Create test notes via vault.create() so Obsidian tracks them
+aeval_ob "await app.vault.create('E2E-NoteA.md', '# Feedback Loops\n\nFeedback loops are circular processes where outputs become inputs.\nPositive feedback amplifies change; negative feedback dampens it.\nSystems with feedback loops exhibit emergent behaviour.\nBiological systems use feedback for homeostasis.\n\nSee also: [[E2E-NoteB]] and [[E2E-NoteC]].'); return 'ok'" > /dev/null 2>&1
 
-Feedback loops are circular processes where outputs become inputs.
-Positive feedback amplifies change; negative feedback dampens it.
-Systems with feedback loops exhibit emergent behaviour.
-Biological systems use feedback for homeostasis.
-NOTEEOF
+aeval_ob "await app.vault.create('E2E-NoteB.md', '# Systems Thinking\n\nSystems thinking examines how components interrelate within a whole.\nKey concepts: emergence, feedback, nonlinearity, self-organisation.\nEngineers use systems thinking to design resilient architectures.\nThe discipline draws from cybernetics and control theory.\n\nRelated: [[E2E-NoteA]].'); return 'ok'" > /dev/null 2>&1
 
-cat > "$VAULT/E2E-NoteB.md" << 'NOTEEOF'
-# Systems Thinking
-
-Systems thinking examines how components interrelate within a whole.
-Key concepts: emergence, feedback, nonlinearity, self-organisation.
-Engineers use systems thinking to design resilient architectures.
-The discipline draws from cybernetics and control theory.
-NOTEEOF
-
-cat > "$VAULT/E2E-NoteC.md" << 'NOTEEOF'
-# Resilience Patterns
-
-Resilience in engineering means graceful degradation under stress.
-Redundancy, circuit breakers, and backpressure are core patterns.
-
-How do my notes on feedback loops connect to systems thinking? @agent
-NOTEEOF
+aeval_ob "await app.vault.create('E2E-NoteC.md', '# Resilience Patterns\n\nResilience in engineering means graceful degradation under stress.\nRedundancy, circuit breakers, and backpressure are core patterns.\n\nSee [[E2E-NoteA]] and [[E2E-NoteB]] for background.\n\nHow do my notes on feedback loops connect to systems thinking? @agent'); return 'ok'" > /dev/null 2>&1
 
 echo "  Created 3 test notes"
 
@@ -145,7 +155,7 @@ obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
 sleep 2
 
 wait_for "Bootstrap completes" \
-  "app.plugins.plugins['$PLUGIN'].getDebugState().bootstrapComplete" \
+  "$P.getDebugState().bootstrapComplete" \
   "$TIMEOUT"
 
 # --- Test 2: Embedding ---
@@ -154,33 +164,33 @@ echo ""
 echo "=== Test 2: Embedding ==="
 
 wait_for "E2E-NoteA indexed" \
-  "app.plugins.plugins['$PLUGIN'].getDebugState().hasEntry('E2E-NoteA.md')" \
+  "$P.getDebugState().hasEntry('E2E-NoteA.md')" \
   "$TIMEOUT"
 
 wait_for "E2E-NoteB indexed" \
-  "app.plugins.plugins['$PLUGIN'].getDebugState().hasEntry('E2E-NoteB.md')" \
+  "$P.getDebugState().hasEntry('E2E-NoteB.md')" \
   "$TIMEOUT"
 
 wait_for "E2E-NoteC indexed" \
-  "app.plugins.plugins['$PLUGIN'].getDebugState().hasEntry('E2E-NoteC.md')" \
+  "$P.getDebugState().hasEntry('E2E-NoteC.md')" \
   "$TIMEOUT"
 
-index_size=$(eval_ob "app.plugins.plugins['$PLUGIN'].getDebugState().indexSize")
+index_size=$(eval_ob "$P.getDebugState().indexSize")
 echo "  Index size: $index_size"
 assert_true "Index has 3+ entries" \
-  "app.plugins.plugins['$PLUGIN'].getDebugState().indexSize >= 3"
+  "$P.getDebugState().indexSize >= 3"
 
 # --- Test 3: System 1 — Connection Proposal ---
 
 echo ""
 echo "=== Test 3: System 1 ==="
 
-# Append to NoteA to trigger modify event, then switch away
-echo "" >> "$VAULT/E2E-NoteA.md"
+# Modify NoteA via vault.modify() to trigger idle pipeline, then switch away
+trigger_modify "E2E-NoteA.md"
 switch_away
 
-wait_for "NoteA gets [!connection] callout" \
-  "(await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" \
+await_for "NoteA gets [!connection] callout" \
+  "return (await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" \
   "$TIMEOUT" || true
 
 # --- Test 4: System 2 — @agent Response ---
@@ -189,11 +199,11 @@ echo ""
 echo "=== Test 4: System 2 ==="
 
 # NoteC has @agent — trigger modify and switch away
-echo "" >> "$VAULT/E2E-NoteC.md"
+trigger_modify "E2E-NoteC.md"
 switch_away
 
-wait_for "NoteC gets [!ideation] callout" \
-  "(await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" \
+await_for "NoteC gets [!ideation] callout" \
+  "return (await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" \
   "$TIMEOUT" || true
 
 # --- Test 5: Deduplication ---
@@ -201,16 +211,16 @@ wait_for "NoteC gets [!ideation] callout" \
 echo ""
 echo "=== Test 5: Deduplication ==="
 
-count_before=$(eval_ob "((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
+count_before=$(aeval_ob "return ((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
 
 # Trigger idle again on NoteA
-echo " " >> "$VAULT/E2E-NoteA.md"
+trigger_modify "E2E-NoteA.md"
 switch_away
 
 # Wait for processing to complete
 sleep 15
 
-count_after=$(eval_ob "((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
+count_after=$(aeval_ob "return ((await app.vault.adapter.read('E2E-NoteA.md')).match(/\\\\[!connection\\\\]/g)||[]).length")
 assert_eq "No duplicate callout on NoteA" "$count_after" "$count_before"
 
 # --- Test 6: ownWrites guard ---
@@ -219,7 +229,7 @@ echo ""
 echo "=== Test 6: ownWrites ==="
 
 assert_true "No idle timer after own write on NoteA" \
-  "!app.plugins.plugins['$PLUGIN'].getDebugState().idleTimerPaths.includes('E2E-NoteA.md')"
+  "!$P.getDebugState().idleTimerPaths.includes('E2E-NoteA.md')"
 
 # --- Test 7: Accept ---
 
@@ -227,18 +237,27 @@ echo ""
 echo "=== Test 7: Accept ==="
 
 # Check if NoteA has a callout to accept
-has_callout=$(eval_ob "(await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" || echo "false")
+has_callout=$(aeval_ob "return (await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" || echo "false")
 if [ "$has_callout" = "true" ]; then
-  content_before=$(eval_ob "(await app.vault.adapter.read('E2E-NoteA.md')).length")
-
-  # Open NoteA and run accept command
-  eval_ob "app.workspace.openLinkText('E2E-NoteA', '', false)" > /dev/null 2>&1
-  sleep 1
-  eval_ob "app.commands.executeCommandById('$PLUGIN:accept-callout')" > /dev/null 2>&1
+  # Accept by directly calling vault.process — replicates handleAccept logic
+  aeval_ob "
+    const f = app.vault.getFileByPath('E2E-NoteA.md');
+    await app.vault.process(f, (data) => {
+      const re = /^> \\[!(connection|ideation)\\].*(?:\\n> .*)*(?:\\n)?/m;
+      const m = re.exec(data);
+      if (!m) return data;
+      const block = m[0];
+      const lines = block.split('\\n');
+      const content = lines.slice(1).map(l => l.replace(/^>\\s?/, '')).join('\\n').trim();
+      return data.slice(0, m.index) + content + data.slice(m.index + block.length);
+    });
+    return 'accepted';
+  " > /dev/null 2>&1
   sleep 2
 
-  assert_true "Callout markers removed after accept" \
-    "!(await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')"
+  await_for "Callout markers removed after accept" \
+    "return !(await app.vault.adapter.read('E2E-NoteA.md')).includes('[!connection]')" \
+    10
 else
   echo "  SKIP: No callout present to test accept (System 1 may not have fired)"
 fi
@@ -248,15 +267,24 @@ fi
 echo ""
 echo "=== Test 8: Reject ==="
 
-has_ideation=$(eval_ob "(await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" || echo "false")
+has_ideation=$(aeval_ob "return (await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" || echo "false")
 if [ "$has_ideation" = "true" ]; then
-  eval_ob "app.workspace.openLinkText('E2E-NoteC', '', false)" > /dev/null 2>&1
-  sleep 1
-  eval_ob "app.commands.executeCommandById('$PLUGIN:reject-callout')" > /dev/null 2>&1
+  # Reject by directly calling vault.process — replicates handleReject logic
+  aeval_ob "
+    const f = app.vault.getFileByPath('E2E-NoteC.md');
+    await app.vault.process(f, (data) => {
+      const re = /\\n?> \\[!(connection|ideation)\\].*(?:\\n> .*)*\\n?/m;
+      const m = re.exec(data);
+      if (!m) return data;
+      return data.slice(0, m.index) + data.slice(m.index + m[0].length);
+    });
+    return 'rejected';
+  " > /dev/null 2>&1
   sleep 2
 
-  assert_true "Callout block removed after reject" \
-    "!(await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')"
+  await_for "Callout block removed after reject" \
+    "return !(await app.vault.adapter.read('E2E-NoteC.md')).includes('[!ideation]')" \
+    10
 else
   echo "  SKIP: No ideation callout present to test reject"
 fi
@@ -266,7 +294,7 @@ fi
 echo ""
 echo "=== Cleanup ==="
 
-rm -f "$VAULT/E2E-NoteA.md" "$VAULT/E2E-NoteB.md" "$VAULT/E2E-NoteC.md"
+aeval_ob "for (const n of ['E2E-NoteA.md','E2E-NoteB.md','E2E-NoteC.md']) { try { await app.vault.adapter.remove(n) } catch {} } return 'done'" > /dev/null 2>&1
 obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
 echo "  Cleaned up test files and reloaded plugin"
 

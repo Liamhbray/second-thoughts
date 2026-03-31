@@ -526,17 +526,16 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 	private async bootstrapInner() {
 		// Wait for metadataCache to finish resolving all files
-		await new Promise<void>((resolve) => {
-			const ref = this.app.metadataCache.on("resolved", () => {
-				this.app.metadataCache.offref(ref);
-				resolve();
+		const alreadyResolved =
+			Object.keys(this.app.metadataCache.resolvedLinks).length > 0;
+		if (!alreadyResolved) {
+			await new Promise<void>((resolve) => {
+				const ref = this.app.metadataCache.on("resolved", () => {
+					this.app.metadataCache.offref(ref);
+					resolve();
+				});
 			});
-			// If already resolved, fire immediately
-			if (this.app.metadataCache.resolved) {
-				this.app.metadataCache.offref(ref);
-				resolve();
-			}
-		});
+		}
 
 		// Load existing shadow files into a temporary map keyed by FS path
 		const shadowMap = await loadAllShadowFiles(this.app);
