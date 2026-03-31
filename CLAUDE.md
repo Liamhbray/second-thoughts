@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-An Obsidian community plugin (TypeScript) that augments notes with AI-generated proposals — relational links and tagged agent responses. See `.planning/SDD.md` for the full design.
+An Obsidian community plugin (TypeScript) that augments notes with AI-generated proposals — relational links and tagged agent responses.
 
 ## Status
 
@@ -20,15 +20,6 @@ All 9 implementation phases complete. E2E tests passing (10/10). Ready for real-
 - `e2e.sh` — Automated E2E test suite using Obsidian CLI. Tests all 8 features against the seed vault.
 - `seed-vault/` — Whale-themed test vault with 17 interconnected notes. Used by E2E and build.
 - `.env` — Local OpenAI API key (`OPENAI_API_KEY=sk-...`). Injected into seed vault by build and E2E scripts.
-
-## Planning & Reference
-
-- `.planning/SDD.md` — Software Design Document. The authoritative spec for behaviour and constraints.
-- `.planning/TDD.md` — Technical Design Document. Implementation architecture.
-- `.planning/PLAN.md` — Implementation Plan. Control flow, module boundaries, build order, and phasing.
-- `.planning/LOGBOOK.md` — Implementation progress. Phase status table and reverse-chronological log.
-- `.planning/ARCHITECTURE.md` — System diagrams (Mermaid).
-- `.planning/resources/` — Offline Obsidian plugin API docs, best practices, community standards, CLI reference, vault events reference. See `INDEX.md` for the master index.
 
 ## Key Technical Decisions
 
@@ -47,6 +38,3 @@ npm test          # 33 unit tests (pure functions, no Obsidian mocking)
 npm run e2e       # 10 E2E tests via Obsidian CLI (requires Obsidian running)
 ```
 
-## Reference Lookup
-
-When implementing, consult `.planning/resources/` files directly rather than searching online. They contain offline snapshots of Obsidian's plugin API docs, best practices, and community standards.
