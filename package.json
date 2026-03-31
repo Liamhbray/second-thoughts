@@ -1,0 +1,21 @@
+{
+	"name": "second-thoughts",
+	"version": "1.0.0",
+	"description": "AI-generated relational links and ideation responses drawn from your vault.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "node esbuild.config.mjs production"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "0.20.2",
+		"obsidian": "latest",
+		"tslib": "2.6.2",
+		"typescript": "5.4.5"
+	}
+}

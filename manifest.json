@@ -1,0 +1,9 @@
+{
+	"id": "second-thoughts",
+	"name": "Second Thoughts",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "AI-generated relational links and ideation responses drawn from your vault.",
+	"author": "Liam Bray",
+	"isDesktopOnly": true
+}
