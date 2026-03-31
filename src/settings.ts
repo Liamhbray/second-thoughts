@@ -37,9 +37,14 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("h2", { text: "Second Thoughts" });
 
+		containerEl.createEl("p", {
+			text: "This plugin sends vault content (note titles, tags, links, and body text) to OpenAI's API for embedding generation and LLM inference. Data is transmitted per note on first index and whenever a note changes. No data is stored by this plugin outside your vault.",
+			cls: "setting-item-description",
+		});
+
 		new Setting(containerEl)
 			.setName("OpenAI API key")
-			.setDesc("Required for embedding generation and LLM calls. Your vault content is sent to OpenAI for processing.")
+			.setDesc("Required for embedding generation and LLM calls.")
 			.addText((text) =>
 				text
 					.setPlaceholder("sk-...")

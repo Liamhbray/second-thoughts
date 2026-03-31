@@ -36,6 +36,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 	private index: EmbeddingIndex = new EmbeddingIndex();
 	private processing: Set<string> = new Set();
 	private bootstrapComplete = false;
+	private consecutiveApiFailures = 0;
+	private apiPausedUntil = 0;
 
 	async onload() {
 		await this.loadSettings();
@@ -148,7 +150,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 			clearTimeout(timer);
 		}
 		this.idleTimers.clear();
+		this.processing.clear();
+		this.ownWrites.clear();
 		this.index.clear();
+		this.consecutiveApiFailures = 0;
+		this.apiPausedUntil = 0;
 		console.log("Second Thoughts: unloaded");
 	}
 
@@ -167,33 +173,63 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.idleTimers.set(file.path, timer);
 	}
 
+	private isApiPaused(): boolean {
+		if (Date.now() < this.apiPausedUntil) {
+			return true;
+		}
+		return false;
+	}
+
+	private recordApiSuccess(): void {
+		this.consecutiveApiFailures = 0;
+	}
+
+	private recordApiFailure(): void {
+		this.consecutiveApiFailures++;
+		if (this.consecutiveApiFailures >= 5) {
+			this.apiPausedUntil = Date.now() + 60_000;
+			console.warn(
+				`Second Thoughts: ${this.consecutiveApiFailures} consecutive API failures — pausing for 60s`
+			);
+		}
+	}
+
 	private async onNoteIdle(file: TFile) {
-		if (this.activeFilePath === file.path) {
-			return;
-		}
-		if (this.processing.has(file.path)) {
-			return;
-		}
-		if (!this.settings.apiKey) {
-			new Notice("Second Thoughts: API key required. Set it in plugin settings.");
-			return;
-		}
-
-		this.processing.add(file.path);
 		try {
-			await this.embedNote(file);
+			if (this.activeFilePath === file.path) {
+				return;
+			}
+			if (this.processing.has(file.path)) {
+				return;
+			}
+			if (!this.settings.apiKey) {
+				new Notice("Second Thoughts: API key required. Set it in plugin settings.");
+				return;
+			}
+			if (this.isApiPaused()) {
+				return;
+			}
 
-			// System 2: runs at any coverage level
-			await this.runSystem2(file);
+			this.processing.add(file.path);
+			try {
+				await this.embedNote(file);
+				this.recordApiSuccess();
 
-			// System 1: only after bootstrap complete
-			if (this.bootstrapComplete) {
-				await this.runSystem1(file);
+				// System 2: runs at any coverage level
+				await this.runSystem2(file);
+
+				// System 1: only after bootstrap complete
+				if (this.bootstrapComplete) {
+					await this.runSystem1(file);
+				}
+			} catch (e) {
+				this.recordApiFailure();
+				console.error(`Second Thoughts: processing failed for ${file.path}`, e);
+			} finally {
+				this.processing.delete(file.path);
 			}
 		} catch (e) {
-			console.error(`Second Thoughts: processing failed for ${file.path}`, e);
-		} finally {
-			this.processing.delete(file.path);
+			console.error(`Second Thoughts: unexpected error in onNoteIdle`, e);
 		}
 	}
 
@@ -481,6 +517,14 @@ export default class SecondThoughtsPlugin extends Plugin {
 	}
 
 	private async bootstrap() {
+		try {
+		await this.bootstrapInner();
+		} catch (e) {
+			console.error("Second Thoughts: bootstrap failed", e);
+		}
+	}
+
+	private async bootstrapInner() {
 		// Wait for metadataCache to finish resolving all files
 		await new Promise<void>((resolve) => {
 			const ref = this.app.metadataCache.on("resolved", () => {
@@ -531,10 +575,12 @@ export default class SecondThoughtsPlugin extends Plugin {
 		for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
 			const batch = staleQueue.slice(i, i + BATCH_SIZE);
 			for (const file of batch) {
-				if (!this.settings.apiKey) break;
+				if (!this.settings.apiKey || this.isApiPaused()) break;
 				try {
 					await this.embedNote(file);
+					this.recordApiSuccess();
 				} catch (e) {
+					this.recordApiFailure();
 					console.error(
 						`Second Thoughts: bootstrap embed failed for ${file.path}`,
 						e
@@ -565,11 +611,30 @@ export default class SecondThoughtsPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData()
-		);
+		let data: any = {};
+		try {
+			data = (await this.loadData()) ?? {};
+		} catch (e) {
+			console.error("Second Thoughts: failed to load settings, using defaults", e);
+		}
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+
+		// Validate numeric settings
+		if (typeof this.settings.idleDebounceMinutes !== "number" || this.settings.idleDebounceMinutes <= 0) {
+			this.settings.idleDebounceMinutes = DEFAULT_SETTINGS.idleDebounceMinutes;
+		}
+		if (typeof this.settings.system1HopDepth !== "number" || this.settings.system1HopDepth < 1) {
+			this.settings.system1HopDepth = DEFAULT_SETTINGS.system1HopDepth;
+		}
+		if (typeof this.settings.topKPerCompartment !== "number" || this.settings.topKPerCompartment < 1) {
+			this.settings.topKPerCompartment = DEFAULT_SETTINGS.topKPerCompartment;
+		}
+		if (!Array.isArray(this.settings.excludedFolders)) {
+			this.settings.excludedFolders = DEFAULT_SETTINGS.excludedFolders;
+		}
+		if (!Array.isArray(this.settings.excludedTags)) {
+			this.settings.excludedTags = DEFAULT_SETTINGS.excludedTags;
+		}
 	}
 
 	async saveSettings() {
