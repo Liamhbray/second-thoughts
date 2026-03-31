@@ -621,16 +621,20 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 			if (paragraphs.length === 0) {
 				// No paragraphs found — append at end
-				return data.trimEnd() + ref + "\n\n" + def + "\n";
+				const hasFootnotes = /^\[\^/.test(data.split("\n").slice(-5).join("\n"));
+				const separator = hasFootnotes ? "" : "\n\n---";
+				return data.trimEnd() + ref + separator + "\n\n" + def + "\n";
 			}
 
 			// Insert reference at end of best paragraph's last line
 			const insertLine = paragraphs[bestPara].endLine;
 			lines[insertLine] = lines[insertLine] + ref;
 
-			// Append definition at bottom of file
-			const result = lines.join("\n").trimEnd() + "\n\n" + def + "\n";
-			return result;
+			// Append definition at bottom — add --- separator if first footnote
+			const joined = lines.join("\n").trimEnd();
+			const hasFootnotes = /^\[\^/m.test(joined.split("\n").slice(-5).join("\n"));
+			const separator = hasFootnotes ? "" : "\n\n---";
+			return joined + separator + "\n\n" + def + "\n";
 		});
 
 		// Track proposed target
