@@ -9,6 +9,7 @@
 !tsconfig.json
 !esbuild.config.mjs
 !vitest.config.ts
+!e2e.sh
 !manifest.json
 !versions.json
 

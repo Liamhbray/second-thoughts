@@ -7,7 +7,8 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"e2e": "bash e2e.sh"
 	},
 	"keywords": [],
 	"author": "",

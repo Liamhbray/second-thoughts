@@ -553,6 +553,17 @@ export default class SecondThoughtsPlugin extends Plugin {
 		);
 	}
 
+	getDebugState() {
+		return {
+			indexSize: this.index.size(),
+			bootstrapComplete: this.bootstrapComplete,
+			processingPaths: [...this.processing],
+			idleTimerPaths: [...this.idleTimers.keys()],
+			hasEntry: (path: string) => !!this.index.get(path),
+			getProposed: (path: string) => this.index.get(path)?.proposed ?? [],
+		};
+	}
+
 	async loadSettings() {
 		this.settings = Object.assign(
 			{},
