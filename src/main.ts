@@ -20,13 +20,9 @@ import {
 	generateSystem1Callout,
 	generateSystem2Callout,
 	findAgentPrompt,
+	findAgentPromptEnd,
 } from "./retrieval";
-import { EditorView } from "@codemirror/view";
-import {
-	calloutDecorationField,
-	createCalloutEffectListener,
-	findCallouts,
-} from "./decorations";
+import { findCallouts } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -81,15 +77,58 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		const effectListener = createCalloutEffectListener(
-			(from, to) => this.handleAccept(from, to),
-			(from, to) => this.handleReject(from, to)
-		);
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			const calloutEls = el.querySelectorAll<HTMLElement>(
+				'.callout[data-callout="connection"], .callout[data-callout="ideation"]'
+			);
+			for (const calloutEl of calloutEls) {
+				const titleEl = calloutEl.querySelector(".callout-title");
+				if (!titleEl) continue;
 
-		this.registerEditorExtension([
-			calloutDecorationField,
-			EditorView.updateListener.of(effectListener),
-		]);
+				const btnContainer = createEl("span", {
+					cls: "second-thoughts-callout-buttons",
+				});
+				btnContainer.style.cssText =
+					"display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;";
+
+				const acceptBtn = btnContainer.createEl("button", {
+					text: "Accept",
+					cls: "second-thoughts-accept-btn",
+				});
+				acceptBtn.style.cssText =
+					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
+					"border: 1px solid var(--background-modifier-border); " +
+					"background: var(--interactive-accent); color: var(--text-on-accent);";
+
+				const rejectBtn = btnContainer.createEl("button", {
+					text: "Reject",
+					cls: "second-thoughts-reject-btn",
+				});
+				rejectBtn.style.cssText =
+					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
+					"border: 1px solid var(--background-modifier-border); " +
+					"background: var(--background-secondary); color: var(--text-normal);";
+
+				const calloutType = calloutEl.getAttribute(
+					"data-callout"
+				) as string;
+				const filePath = ctx.sourcePath;
+
+				acceptBtn.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.handleCalloutByType("accept", calloutType, filePath);
+				});
+
+				rejectBtn.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.handleCalloutByType("reject", calloutType, filePath);
+				});
+
+				titleEl.appendChild(btnContainer);
+			}
+		});
 
 		this.addCommand({
 			id: "accept-callout",
@@ -297,6 +336,57 @@ export default class SecondThoughtsPlugin extends Plugin {
 		return null;
 	}
 
+	private async handleCalloutByType(
+		action: "accept" | "reject",
+		calloutType: string,
+		filePath: string
+	): Promise<void> {
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!file) return;
+
+		try {
+			await this.app.vault.process(file, (data) => {
+				const callouts = findCallouts(data);
+				// Find the first callout matching the type
+				const callout = callouts.find((c) => c.type === calloutType);
+				if (!callout) return data;
+
+				if (action === "accept") {
+					const block = data.slice(callout.from, callout.to);
+					const lines = block.split("\n");
+					const contentLines: string[] = [];
+					for (let i = 0; i < lines.length; i++) {
+						if (i === 0) continue;
+						contentLines.push(lines[i].replace(/^>\s?/, ""));
+					}
+					const plainContent = contentLines.join("\n").trim();
+					return (
+						data.slice(0, callout.from) +
+						plainContent +
+						data.slice(callout.to)
+					);
+				} else {
+					let start = callout.from;
+					let end = callout.to;
+					while (end < data.length && data[end] === "\n") {
+						end++;
+					}
+					if (start > 0 && data[start - 1] === "\n") {
+						start--;
+						if (start > 0 && data[start - 1] === "\n") {
+							start--;
+						}
+					}
+					return data.slice(0, start) + data.slice(end);
+				}
+			});
+			this.ownWrites.add(file.path);
+			console.log(`Second Thoughts: ${action}ed callout in ${file.path}`);
+		} catch (e) {
+			console.error(`Second Thoughts: ${action} failed`, e);
+		}
+	}
+
 	private async handleAccept(from: number, to: number): Promise<void> {
 		const file = this.getActiveFile();
 		if (!file) return;
@@ -304,16 +394,10 @@ export default class SecondThoughtsPlugin extends Plugin {
 		try {
 			await this.app.vault.process(file, (data) => {
 				const block = data.slice(from, to);
-				// Strip callout markers: remove `> [!connection]`/`> [!ideation]` header
-				// and `> ` prefix from continuation lines
 				const lines = block.split("\n");
 				const contentLines: string[] = [];
 				for (let i = 0; i < lines.length; i++) {
-					if (i === 0) {
-						// Skip the header line `> [!type]`
-						continue;
-					}
-					// Strip `> ` prefix
+					if (i === 0) continue;
 					contentLines.push(lines[i].replace(/^>\s?/, ""));
 				}
 				const plainContent = contentLines.join("\n").trim();
@@ -331,14 +415,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 		try {
 			await this.app.vault.process(file, (data) => {
-				// Delete the entire callout block and surrounding blank lines
 				let start = from;
 				let end = to;
-				// Consume trailing newline
 				while (end < data.length && data[end] === "\n") {
 					end++;
 				}
-				// Consume leading blank line
 				if (start > 0 && data[start - 1] === "\n") {
 					start--;
 					if (start > 0 && data[start - 1] === "\n") {
@@ -446,11 +527,25 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 		this.ownWrites.add(file.path);
 		await this.app.vault.process(file, (data) => {
-			// Final guard inside atomic callback
 			if (this.activeFilePath === file.path) {
 				return data;
 			}
-			return data + "\n\n" + callout + "\n";
+			// Insert after the first heading line (top of file)
+			const lines = data.split("\n");
+			let insertAfter = 0;
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i].startsWith("#")) {
+					insertAfter = i;
+					break;
+				}
+			}
+			// Find end of the heading's trailing blank lines
+			let pos = insertAfter + 1;
+			while (pos < lines.length && lines[pos].trim() === "") {
+				pos++;
+			}
+			lines.splice(pos, 0, "", callout, "");
+			return lines.join("\n");
 		});
 
 		// Track proposed targets in shadow file
@@ -510,7 +605,21 @@ export default class SecondThoughtsPlugin extends Plugin {
 			if (this.activeFilePath === file.path) {
 				return data;
 			}
-			return data + "\n\n" + callout + "\n";
+			// Insert after the @agent paragraph
+			const endOffset = findAgentPromptEnd(
+				data,
+				this.settings.agentTag
+			);
+			if (endOffset === -1) {
+				return data + "\n\n" + callout + "\n";
+			}
+			return (
+				data.slice(0, endOffset + 1) +
+				"\n\n" +
+				callout +
+				"\n" +
+				data.slice(endOffset + 1)
+			);
 		});
 
 		console.log(`Second Thoughts: proposed ideation for ${file.path}`);

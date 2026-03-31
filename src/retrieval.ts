@@ -389,6 +389,28 @@ export async function generateSystem2Callout(
 
 // --- @agent tag scanning ---
 
+export function findAgentPromptEnd(
+	content: string,
+	agentTag: string
+): number {
+	const lines = content.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (lines[i].includes(agentTag)) {
+			let end = i;
+			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
+				end++;
+			}
+			// Return character offset of end of this paragraph
+			let offset = 0;
+			for (let j = 0; j <= end; j++) {
+				offset += lines[j].length + 1;
+			}
+			return offset - 1; // exclude trailing newline
+		}
+	}
+	return -1;
+}
+
 export function findAgentPrompt(
 	content: string,
 	agentTag: string
