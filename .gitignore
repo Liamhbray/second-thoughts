@@ -12,6 +12,8 @@
 !e2e.sh
 !manifest.json
 !versions.json
+!README.md
+!LICENSE
 
 # Whitelist: source code
 !src/
