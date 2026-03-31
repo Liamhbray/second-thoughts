@@ -21,6 +21,7 @@ import {
 	generateSystem2Callout,
 	findAgentPrompt,
 } from "./retrieval";
+import { calloutDecorationField } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings: SecondThoughtsSettings;
@@ -72,6 +73,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 				}
 			)
 		);
+
+		this.registerEditorExtension([calloutDecorationField]);
 
 		this.app.workspace.onLayoutReady(() => {
 			this.bootstrap();
