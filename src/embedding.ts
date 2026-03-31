@@ -114,7 +114,7 @@ export async function embedCompartments(
 
 // --- Shadow file storage ---
 
-function hashPath(path: string): string {
+export function hashPath(path: string): string {
 	let hash = 0;
 	for (let i = 0; i < path.length; i++) {
 		const ch = path.charCodeAt(i);

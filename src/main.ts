@@ -9,6 +9,9 @@ import {
 	extractCompartments,
 	embedCompartments,
 	saveShadowFile,
+	loadAllShadowFiles,
+	loadShadowFile,
+	hashPath,
 	ShadowFile,
 } from "./embedding";
 
@@ -19,6 +22,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 	private ownWrites: Set<string> = new Set();
 	private index: EmbeddingIndex = new EmbeddingIndex();
 	private processing: Set<string> = new Set();
+	private bootstrapComplete = false;
 
 	async onload() {
 		await this.loadSettings();
@@ -61,6 +65,10 @@ export default class SecondThoughtsPlugin extends Plugin {
 				}
 			)
 		);
+
+		this.app.workspace.onLayoutReady(() => {
+			this.bootstrap();
+		});
 
 		console.log("Second Thoughts: loaded");
 	}
@@ -148,6 +156,79 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.index.set(file.path, shadow);
 
 		console.log(`Second Thoughts: embedded ${file.path}`);
+	}
+
+	private async bootstrap() {
+		// Wait for metadataCache to finish resolving all files
+		await new Promise<void>((resolve) => {
+			const ref = this.app.metadataCache.on("resolved", () => {
+				this.app.metadataCache.offref(ref);
+				resolve();
+			});
+			// If already resolved, fire immediately
+			if (this.app.metadataCache.resolved) {
+				this.app.metadataCache.offref(ref);
+				resolve();
+			}
+		});
+
+		// Load existing shadow files into a temporary map keyed by FS path
+		const shadowMap = await loadAllShadowFiles(this.app);
+
+		// Scan vault and match shadow files by hash
+		const allNotes = this.app.vault.getMarkdownFiles();
+		const staleQueue: TFile[] = [];
+
+		for (const note of allNotes) {
+			const hash = hashPath(note.path);
+			const shadowKey = [...shadowMap.keys()].find((k) =>
+				k.endsWith(`/${hash}.json`)
+			);
+
+			if (shadowKey) {
+				const shadow = shadowMap.get(shadowKey)!;
+				this.index.set(note.path, shadow);
+				if (shadow.mtime !== note.stat.mtime) {
+					staleQueue.push(note);
+				}
+				shadowMap.delete(shadowKey);
+			} else {
+				staleQueue.push(note);
+			}
+		}
+
+		// Sort: recently modified first
+		staleQueue.sort((a, b) => b.stat.mtime - a.stat.mtime);
+
+		console.log(
+			`Second Thoughts: bootstrap — ${this.index.size()} cached, ${staleQueue.length} to embed`
+		);
+
+		// Process in batches of 50 with yields
+		const BATCH_SIZE = 50;
+		for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
+			const batch = staleQueue.slice(i, i + BATCH_SIZE);
+			for (const file of batch) {
+				if (!this.settings.apiKey) break;
+				try {
+					await this.embedNote(file);
+				} catch (e) {
+					console.error(
+						`Second Thoughts: bootstrap embed failed for ${file.path}`,
+						e
+					);
+				}
+			}
+			// Yield to main thread between batches
+			if (i + BATCH_SIZE < staleQueue.length) {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+		}
+
+		this.bootstrapComplete = true;
+		console.log(
+			`Second Thoughts: bootstrap complete — ${this.index.size()} notes indexed`
+		);
 	}
 
 	async loadSettings() {
