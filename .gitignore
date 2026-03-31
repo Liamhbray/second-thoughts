@@ -1,5 +1,17 @@
-second-thoughts-dev/
-node_modules/
-dist/
-main.js
-.DS_Store
+# Ignore everything
+*
+
+# Whitelist: project config
+!.gitignore
+!CLAUDE.md
+!package.json
+!package-lock.json
+!tsconfig.json
+!esbuild.config.mjs
+!manifest.json
+!versions.json
+
+# Whitelist: source code
+!src/
+!src/**
+

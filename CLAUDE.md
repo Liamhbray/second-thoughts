@@ -4,21 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-An Obsidian community plugin (TypeScript) that augments notes with AI-generated proposals — relational links and tagged agent responses. See `SDD.md` for the full design.
+An Obsidian community plugin (TypeScript) that augments notes with AI-generated proposals — relational links and tagged agent responses. See `.planning/SDD.md` for the full design.
 
 ## Key Files
 
-- `SDD.md` — Software Design Document. The authoritative spec for behaviour and constraints.
-- `TDD.md` — Technical Design Document. Implementation architecture (vendor choices, embeddings, pipeline, bootstrapping).
-- `PLAN.md` — Implementation Plan. Control flow, module boundaries, build order, and phasing.
-- `LOGBOOK.md` — Implementation progress. Phase status table and reverse-chronological log.
-- `ARCHITECTURE.md` — System diagrams (Mermaid). Overview, flows, data model, lifecycle.
-- `resources/INDEX.md` — Master index for the offline Obsidian plugin development reference library.
-- `resources/api-reference.md` — Obsidian Plugin API (Vault, MetadataCache, Workspace, Editor, UI).
-- `resources/best-practices.md` — Official guidelines and recommended patterns.
-- `resources/community-standards.md` — Submission process, review criteria, manifest format, releases.
-- `resources/gotchas.md` — 20 common pitfalls with fixes (threading, mobile, cache timing, etc.).
-- `resources/production-readiness.md` — Testing, performance, CI/CD, accessibility, security.
+- `.planning/SDD.md` — Software Design Document. The authoritative spec for behaviour and constraints.
+- `.planning/TDD.md` — Technical Design Document. Implementation architecture (vendor choices, embeddings, pipeline, bootstrapping).
+- `.planning/PLAN.md` — Implementation Plan. Control flow, module boundaries, build order, and phasing.
+- `.planning/LOGBOOK.md` — Implementation progress. Phase status table and reverse-chronological log.
+- `.planning/ARCHITECTURE.md` — System diagrams (Mermaid). Overview, flows, data model, lifecycle.
+- `.planning/resources/INDEX.md` — Master index for the offline Obsidian plugin development reference library.
+- `.planning/resources/api-reference.md` — Obsidian Plugin API (Vault, MetadataCache, Workspace, Editor, UI).
+- `.planning/resources/best-practices.md` — Official guidelines and recommended patterns.
+- `.planning/resources/community-standards.md` — Submission process, review criteria, manifest format, releases.
+- `.planning/resources/gotchas.md` — 20 common pitfalls with fixes (threading, mobile, cache timing, etc.).
+- `.planning/resources/production-readiness.md` — Testing, performance, CI/CD, accessibility, security.
 
 ## Key Technical Decisions
 
@@ -29,4 +29,4 @@ An Obsidian community plugin (TypeScript) that augments notes with AI-generated 
 
 ## Reference Lookup
 
-When implementing, consult `resources/` files directly rather than searching online. They contain offline snapshots of Obsidian's plugin API docs, best practices, and community standards. The `resources/INDEX.md` cross-references SDD sections to relevant resource files.
+When implementing, consult `.planning/resources/` files directly rather than searching online. They contain offline snapshots of Obsidian's plugin API docs, best practices, and community standards. The `.planning/resources/INDEX.md` cross-references SDD sections to relevant resource files.
