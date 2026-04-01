@@ -256,7 +256,8 @@ function formatResultSections(results: RetrievalResults, app: App): string {
 async function callLLM(
 	prompt: string,
 	apiKey: string,
-	maxTokens = 500
+	maxTokens = 500,
+	model = "gpt-4o-mini"
 ): Promise<string | null> {
 	const response = await requestUrl({
 		url: "https://api.openai.com/v1/chat/completions",
@@ -266,7 +267,7 @@ async function callLLM(
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({
-			model: "gpt-4o-mini",
+			model,
 			messages: [{ role: "user", content: prompt }],
 			temperature: 0.7,
 			max_tokens: maxTokens,
@@ -377,38 +378,28 @@ export async function generateSystem1Callout(
 	return text;
 }
 
-// --- System 2 ---
+// --- Ideation ---
 
-function buildSystem2Prompt(
+function buildIdeationPrompt(
 	noteContent: string,
 	notePath: string,
-	agentPrompt: string,
+	userPrompt: string,
 	results: RetrievalResults,
 	app: App
 ): string {
-	return `You are an assistant that explores a user's questions and ideas using only knowledge from their personal notes. You will be given:
-1. The content of the current note
-2. The user's specific question or prompt (tagged with @agent)
-3. A set of related notes found by semantic similarity
-
-Your task: synthesise a response that addresses the user's prompt using ONLY material from their notes.
+	return `You are an assistant that explores a user's questions and ideas using only knowledge from their personal notes.
 
 Rules:
-- Output ONLY the callout block, nothing else
-- Use this exact format:
-
-> [!ideation]
-> Your synthesis with [[NoteNames]] woven naturally into the response — drawing connections across the user's own notes to address their question.
-
-- All wikilinks must reference real notes from the results
-- Synthesise across multiple notes where relevant
-- Draw only from the user's own notes — no external knowledge
+- Write plain prose with [[NoteNames]] as wikilinks where relevant
+- Synthesise across multiple notes where appropriate
+- Draw ONLY from the user's own notes — no external knowledge
 - Address the user's prompt directly
-- If no relevant material exists, output nothing
+- Do NOT use callout blocks, headers, or special formatting
+- If no relevant material exists, say so briefly
 
 User's prompt:
 ---
-${agentPrompt}
+${userPrompt}
 ---
 
 Current note (${notePath}):
@@ -421,75 +412,159 @@ Related notes found by similarity:
 ${formatResultSections(results, app)}`;
 }
 
-export async function generateSystem2Callout(
+export async function generateIdeation(
 	noteContent: string,
 	notePath: string,
-	agentPrompt: string,
+	userPrompt: string,
 	results: RetrievalResults,
 	apiKey: string,
 	app: App
 ): Promise<string | null> {
-	const prompt = buildSystem2Prompt(noteContent, notePath, agentPrompt, results, app);
+	const prompt = buildIdeationPrompt(noteContent, notePath, userPrompt, results, app);
 	const text = await callLLM(prompt, apiKey);
-	if (!text || !text.includes("[!ideation]")) {
+	if (!text || text.trim().length === 0) {
 		return null;
 	}
-	return text;
+	return text.trim();
 }
 
-// --- @agent tag scanning ---
+// --- Cross-Cluster Bridging ---
 
-export function findAgentPromptEnd(
-	content: string,
-	agentTag: string
-): number {
-	const lines = content.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		if (lines[i].includes(agentTag)) {
-			let end = i;
-			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
-				end++;
+/**
+ * Embed a single text string via OpenAI text-embedding-3-small.
+ */
+export async function embedText(
+	text: string,
+	apiKey: string
+): Promise<number[]> {
+	const response = await requestUrl({
+		url: "https://api.openai.com/v1/embeddings",
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: "text-embedding-3-small",
+			input: [text],
+		}),
+	});
+	return response.json.data[0].embedding;
+}
+
+/**
+ * Select K diverse results from candidates using Maximal Marginal Relevance.
+ * Balances relevance to the query with diversity among selected results.
+ *
+ * @param queryVec - embedding of the user's selection
+ * @param candidates - path → content embedding vector
+ * @param k - number of results to select
+ * @param lambda - 0..1, higher = more relevance, lower = more diversity
+ */
+export function selectDiverseResults(
+	queryVec: number[],
+	candidates: Map<string, number[]>,
+	k: number,
+	lambda = 0.5
+): string[] {
+	const selected: string[] = [];
+	const remaining = new Map(candidates);
+
+	for (let i = 0; i < k && remaining.size > 0; i++) {
+		let bestPath = "";
+		let bestScore = -Infinity;
+
+		for (const [path, vec] of remaining) {
+			const relevance = cosineSimilarity(queryVec, vec);
+
+			let maxRedundancy = 0;
+			for (const selPath of selected) {
+				const selVec = candidates.get(selPath)!;
+				const sim = cosineSimilarity(vec, selVec);
+				if (sim > maxRedundancy) maxRedundancy = sim;
 			}
-			// Return character offset of end of this paragraph
-			let offset = 0;
-			for (let j = 0; j <= end; j++) {
-				offset += lines[j].length + 1;
+
+			const score =
+				lambda * relevance - (1 - lambda) * maxRedundancy;
+			if (score > bestScore) {
+				bestScore = score;
+				bestPath = path;
 			}
-			return offset - 1; // exclude trailing newline
+		}
+
+		if (bestPath) {
+			selected.push(bestPath);
+			remaining.delete(bestPath);
 		}
 	}
-	return -1;
+
+	return selected;
 }
 
-export function findAgentPrompt(
-	content: string,
-	agentTag: string
-): string | null {
-	// Find the line containing the agent tag
-	const lines = content.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		if (lines[i].includes(agentTag)) {
-			// The prompt is the text around the tag — take the paragraph
-			const promptLines: string[] = [];
-			// Scan backwards for paragraph start
-			let start = i;
-			while (start > 0 && lines[start - 1].trim().length > 0) {
-				start--;
-			}
-			// Scan forwards for paragraph end
-			let end = i;
-			while (end < lines.length - 1 && lines[end + 1].trim().length > 0) {
-				end++;
-			}
-			for (let j = start; j <= end; j++) {
-				promptLines.push(lines[j]);
-			}
-			// Remove the tag itself from the prompt text
-			return promptLines
-				.join("\n")
-				.replace(agentTag, "")
-				.trim();
+/**
+ * Build the cross-cluster bridging ideation prompt.
+ */
+function buildBridgingPrompt(
+	selectionText: string,
+	userInstruction: string,
+	diverseNotes: { title: string; content: string }[],
+	ideaCount: number
+): string {
+	const noteBlocks = diverseNotes
+		.map((n) => `"${n.title}": ${n.content.substring(0, 800)}`)
+		.join("\n\n");
+
+	return `The user has these notes:
+
+${noteBlocks}
+
+They selected this passage:
+"${selectionText}"
+${userInstruction ? `\nThey ask: ${userInstruction}\n` : ""}
+Suggest ${ideaCount} novel ideas that emerge from combining these notes in unexpected ways. Each idea should be ONE sentence that connects at least 2 notes the user hasn't linked. Use [[NoteTitle]] wikilinks.
+
+Format:
+${Array.from({ length: ideaCount }, (_, i) => `[${i + 1}] idea`).join("\n")}`;
+}
+
+/**
+ * Generate cross-cluster bridging ideas from diverse vault notes.
+ */
+export async function generateBridgingIdeas(
+	selectionText: string,
+	userInstruction: string,
+	diverseNotePaths: string[],
+	apiKey: string,
+	model: string,
+	ideaCount: number,
+	app: App
+): Promise<string[] | null> {
+	const diverseNotes: { title: string; content: string }[] = [];
+	for (const path of diverseNotePaths) {
+		const file = app.vault.getAbstractFileByPath(path);
+		if (file instanceof TFile) {
+			const content = await app.vault.read(file);
+			diverseNotes.push({ title: file.basename, content });
 		}
 	}
-	return null;
+
+	if (diverseNotes.length === 0) return null;
+
+	const prompt = buildBridgingPrompt(
+		selectionText,
+		userInstruction,
+		diverseNotes,
+		ideaCount
+	);
+	const text = await callLLM(prompt, apiKey, ideaCount * 100, model);
+	if (!text || text.trim().length === 0) return null;
+
+	// Split on [1] [2] [3] markers
+	const ideas = text
+		.split(/\[\d+\]\s*/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+
+	return ideas.length > 0 ? ideas : null;
 }
+

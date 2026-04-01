@@ -15,15 +15,11 @@ import {
 } from "./embedding";
 import {
 	filterCandidates,
-	filterCandidatesSystem2,
 	retrieveSimilar,
-	generateSystem1Callout,
-	generateSystem2Callout,
 	generateFootnoteReason,
-	findAgentPrompt,
-	findAgentPromptEnd,
 	cosineSimilarity,
 } from "./retrieval";
+import { IdeationModal } from "./ideation-modal";
 import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
@@ -40,6 +36,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new SecondThoughtsSettingTab(this.app, this));
+
 
 		this.registerEvent(
 			this.app.vault.on("modify", (file: TAbstractFile) => {
@@ -79,55 +76,23 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		// Ideation callout buttons (kept until ideas feature replaces them)
-		this.registerMarkdownPostProcessor((el, ctx) => {
-			const ideationEls = el.querySelectorAll<HTMLElement>(
-				'.callout[data-callout="ideation"]'
-			);
-			for (const calloutEl of ideationEls) {
-				const titleEl = calloutEl.querySelector(".callout-title");
-				if (!titleEl) continue;
-
-				const btnContainer = createEl("span", {
-					cls: "second-thoughts-callout-buttons",
-				});
-				btnContainer.style.cssText =
-					"display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;";
-
-				const acceptBtn = btnContainer.createEl("button", {
-					text: "Accept",
-					cls: "second-thoughts-accept-btn",
-				});
-				acceptBtn.style.cssText =
-					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--interactive-accent); color: var(--text-on-accent);";
-
-				const rejectBtn = btnContainer.createEl("button", {
-					text: "Reject",
-					cls: "second-thoughts-reject-btn",
-				});
-				rejectBtn.style.cssText =
-					"font-size: 11px; padding: 1px 8px; cursor: pointer; border-radius: 3px; " +
-					"border: 1px solid var(--background-modifier-border); " +
-					"background: var(--background-secondary); color: var(--text-normal);";
-
-				const filePath = ctx.sourcePath;
-
-				acceptBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleCalloutByType("accept", "ideation", filePath);
-				});
-
-				rejectBtn.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.handleCalloutByType("reject", "ideation", filePath);
-				});
-
-				titleEl.appendChild(btnContainer);
-			}
+		// Command: open ideation modal
+		this.addCommand({
+			id: "ideate",
+			name: "Ask Second Thoughts",
+			editorCallback: (editor, view) => {
+				if (!view.file) return;
+				if (!this.settings.enableIdeation) return;
+				const selection = editor.getSelection();
+				new IdeationModal(
+					this.app,
+					editor,
+					selection,
+					this.settings,
+					this.index,
+					view.file.path
+				).open();
+			},
 		});
 
 		this.addCommand({
@@ -254,11 +219,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 				await this.embedNote(file);
 				this.recordApiSuccess();
 
-				// System 2: runs at any coverage level
-				await this.runSystem2(file);
-
-				// System 1: only after bootstrap complete
-				if (this.bootstrapComplete) {
+				// System 1 (footnotes): only after bootstrap complete
+				if (this.bootstrapComplete && this.settings.enableFootnotes) {
 					await this.runSystem1(file);
 				}
 			} catch (e) {
@@ -360,21 +322,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 						contentLines.push(lines[i].replace(/^>\s?/, ""));
 					}
 					const plainContent = contentLines.join("\n").trim();
-					let result =
+					return (
 						data.slice(0, callout.from) +
 						plainContent +
-						data.slice(callout.to);
-
-					// For ideation: also strip the @agent prompt line
-					if (calloutType === "ideation") {
-						const tag = this.settings.agentTag;
-						const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-						result = result.replace(
-							new RegExp("^[^\\n]*" + escaped + "[^\\n]*\\n?", "m"),
-							""
-						);
-					}
-					return result;
+						data.slice(callout.to)
+					);
 				} else {
 					let start = callout.from;
 					let end = callout.to;
@@ -495,10 +447,10 @@ export default class SecondThoughtsPlugin extends Plugin {
 			shadow,
 			candidates,
 			this.index,
-			this.settings.topKPerCompartment
+			this.settings.topK
 		);
 
-		// Collect all candidate paths and find the best unproposed one
+		// Rank all unproposed candidates by content similarity, filter by threshold
 		const allPaths = new Set([
 			...results.title.map((r) => r.path),
 			...results.tags.map((r) => r.path),
@@ -506,18 +458,9 @@ export default class SecondThoughtsPlugin extends Plugin {
 			...results.content.map((r) => r.path),
 		]);
 
-		const unproposed = [...allPaths].filter(
-			(p) => !shadow.proposed.includes(p)
-		);
-		if (unproposed.length === 0) {
-			console.log(
-				`Second Thoughts: all candidates already proposed for ${file.path}`
-			);
-			return;
-		}
-
-		// Pick the top unproposed candidate by content similarity
-		const ranked = unproposed
+		const threshold = this.settings.footnoteThreshold;
+		const targets = [...allPaths]
+			.filter((p) => !shadow.proposed.includes(p))
 			.map((p) => {
 				const s = this.index.get(p);
 				if (!s?.content?.length) return { path: p, score: 0 };
@@ -526,198 +469,154 @@ export default class SecondThoughtsPlugin extends Plugin {
 					score: cosineSimilarity(shadow.content, s.content),
 				};
 			})
+			.filter((r) => r.score >= threshold)
 			.sort((a, b) => b.score - a.score);
 
-		const bestTarget = ranked[0].path;
+		if (targets.length === 0) {
+			console.log(
+				`Second Thoughts: no candidates above threshold (${threshold}) for ${file.path}`
+			);
+			return;
+		}
 
 		const noteContent = await this.app.vault.read(file);
+		const proposedPaths: string[] = [];
 
-		// Generate a plain-text reason via LLM
-		const proposal = await generateFootnoteReason(
-			noteContent,
-			file.path,
-			bestTarget,
-			this.settings.apiKey,
-			this.app
-		);
+		for (const target of targets) {
+			// Re-check idle before each API call
+			if (this.activeFilePath === file.path) break;
+			if (this.isApiPaused()) break;
 
-		if (!proposal) {
-			console.log(
-				`Second Thoughts: LLM returned no footnote for ${file.path}`
-			);
-			return;
-		}
-
-		// Final idle re-check
-		if (this.activeFilePath === file.path) {
-			return;
-		}
-
-		// Find the best paragraph to attach the footnote to
-		const targetShadow = this.index.get(bestTarget);
-
-		this.ownWrites.add(file.path);
-		await this.app.vault.process(file, (data) => {
-			if (this.activeFilePath === file.path) {
-				return data;
-			}
-
-			// Guard: skip if this target is already in a footnote definition
-			if (data.includes(`[[${proposal.targetName}]]`) &&
-				data.match(new RegExp(`^\\[\\^st-\\d+\\]:.*\\[\\[${proposal.targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\]`, "m"))) {
-				return data;
-			}
-
-			const id = nextFootnoteId(data);
-			const { ref, def } = formatFootnote(
-				id,
-				proposal.targetName,
-				proposal.reason
+			const proposal = await generateFootnoteReason(
+				noteContent,
+				file.path,
+				target.path,
+				this.settings.apiKey,
+				this.app
 			);
 
-			// Find the best paragraph to place the reference
-			const lines = data.split("\n");
-			const paragraphs: { endLine: number; text: string }[] = [];
-			let paraStart = -1;
+			if (!proposal) continue;
+			this.recordApiSuccess();
 
-			for (let i = 0; i < lines.length; i++) {
-				const blank = lines[i].trim() === "";
-				const isHeading = lines[i].startsWith("#");
-				const isTag = lines[i].match(/^#\w/);
-				const isMeta =
-					lines[i].startsWith("[^") || lines[i].startsWith("---");
+			// Final idle re-check before write
+			if (this.activeFilePath === file.path) break;
 
-				if (!blank && !isHeading && !isMeta && !isTag) {
-					if (paraStart === -1) paraStart = i;
-				} else if (paraStart !== -1) {
-					paragraphs.push({
-						endLine: i - 1,
-						text: lines.slice(paraStart, i).join("\n"),
-					});
-					paraStart = -1;
+			this.ownWrites.add(file.path);
+			await this.app.vault.process(file, (data) => {
+				if (this.activeFilePath === file.path) return data;
+
+				// Guard: skip if target already in a footnote definition
+				const escaped = proposal.targetName.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					"\\$&"
+				);
+				if (
+					data.match(
+						new RegExp(
+							`^\\[\\^st-\\d+\\]:.*\\[\\[${escaped}\\]\\]`,
+							"m"
+						)
+					)
+				) {
+					return data;
 				}
-			}
-			if (paraStart !== -1) {
-				paragraphs.push({
-					endLine: lines.length - 1,
-					text: lines.slice(paraStart).join("\n"),
-				});
-			}
 
-			// Pick the paragraph most similar to the target note's content
-			let bestPara = paragraphs.length - 1;
-			if (targetShadow?.content?.length && paragraphs.length > 1) {
-				// Simple heuristic: pick the paragraph that shares the most
-				// keywords with the target note's title
-				const targetTitle = proposal.targetName.toLowerCase();
-				let bestScore = -1;
-				for (let i = 0; i < paragraphs.length; i++) {
-					const pText = paragraphs[i].text.toLowerCase();
-					// Score: count target title words found in paragraph
-					const words = targetTitle.split(/\s+/);
-					const score = words.filter((w) =>
-						pText.includes(w)
-					).length;
-					if (score > bestScore) {
-						bestScore = score;
-						bestPara = i;
+				const id = nextFootnoteId(data);
+				const { ref, def } = formatFootnote(
+					id,
+					proposal.targetName,
+					proposal.reason
+				);
+
+				const lines = data.split("\n");
+				const paragraphs: { endLine: number; text: string }[] = [];
+				let paraStart = -1;
+
+				for (let i = 0; i < lines.length; i++) {
+					const blank = lines[i].trim() === "";
+					const isHeading = lines[i].startsWith("#");
+					const isTag = lines[i].match(/^#\w/);
+					const isMeta =
+						lines[i].startsWith("[^") ||
+						lines[i].startsWith("---");
+
+					if (!blank && !isHeading && !isMeta && !isTag) {
+						if (paraStart === -1) paraStart = i;
+					} else if (paraStart !== -1) {
+						paragraphs.push({
+							endLine: i - 1,
+							text: lines.slice(paraStart, i).join("\n"),
+						});
+						paraStart = -1;
 					}
 				}
-			}
+				if (paraStart !== -1) {
+					paragraphs.push({
+						endLine: lines.length - 1,
+						text: lines.slice(paraStart).join("\n"),
+					});
+				}
 
-			if (paragraphs.length === 0) {
-				// No paragraphs found — append at end
-				const hasFootnotes = /^\[\^/.test(data.split("\n").slice(-5).join("\n"));
+				// Pick paragraph by keyword match to target title
+				let bestPara = paragraphs.length - 1;
+				if (paragraphs.length > 1) {
+					const titleWords = proposal.targetName
+						.toLowerCase()
+						.split(/\s+/);
+					let bestScore = -1;
+					for (let i = 0; i < paragraphs.length; i++) {
+						const pText = paragraphs[i].text.toLowerCase();
+						const score = titleWords.filter((w) =>
+							pText.includes(w)
+						).length;
+						if (score > bestScore) {
+							bestScore = score;
+							bestPara = i;
+						}
+					}
+				}
+
+				if (paragraphs.length === 0) {
+					const hasFootnotes = /^\[\^/.test(
+						data.split("\n").slice(-5).join("\n")
+					);
+					const separator = hasFootnotes ? "" : "\n\n---";
+					return (
+						data.trimEnd() +
+						ref +
+						separator +
+						"\n\n" +
+						def +
+						"\n"
+					);
+				}
+
+				const insertLine = paragraphs[bestPara].endLine;
+				lines[insertLine] = lines[insertLine] + ref;
+
+				const joined = lines.join("\n").trimEnd();
+				const hasFootnotes = /^\[\^/m.test(
+					joined.split("\n").slice(-5).join("\n")
+				);
 				const separator = hasFootnotes ? "" : "\n\n---";
-				return data.trimEnd() + ref + separator + "\n\n" + def + "\n";
-			}
+				return joined + separator + "\n\n" + def + "\n";
+			});
 
-			// Insert reference at end of best paragraph's last line
-			const insertLine = paragraphs[bestPara].endLine;
-			lines[insertLine] = lines[insertLine] + ref;
-
-			// Append definition at bottom — add --- separator if first footnote
-			const joined = lines.join("\n").trimEnd();
-			const hasFootnotes = /^\[\^/m.test(joined.split("\n").slice(-5).join("\n"));
-			const separator = hasFootnotes ? "" : "\n\n---";
-			return joined + separator + "\n\n" + def + "\n";
-		});
-
-		// Track proposed target
-		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
-		await saveShadowFile(this.app, file.path, shadow);
-
-		new Notice(`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`);
-		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
-	}
-
-	private async runSystem2(file: TFile): Promise<void> {
-		const noteContent = await this.app.vault.read(file);
-		const agentPrompt = findAgentPrompt(noteContent, this.settings.agentTag);
-
-		if (!agentPrompt) {
-			return;
-		}
-
-		const shadow = this.index.get(file.path);
-		if (!shadow) return;
-
-		const candidates = filterCandidatesSystem2(
-			this.app,
-			file.path,
-			this.settings,
-			this.index
-		);
-
-		const results = retrieveSimilar(
-			shadow,
-			candidates,
-			this.index,
-			this.settings.topKPerCompartment
-		);
-
-		const callout = await generateSystem2Callout(
-			noteContent,
-			file.path,
-			agentPrompt,
-			results,
-			this.settings.apiKey,
-			this.app
-		);
-
-		if (!callout) {
-			console.log(`Second Thoughts: LLM returned no ideation for ${file.path}`);
-			return;
-		}
-
-		// Final idle re-check + atomic write
-		if (this.activeFilePath === file.path) {
-			return;
-		}
-
-		this.ownWrites.add(file.path);
-		await this.app.vault.process(file, (data) => {
-			if (this.activeFilePath === file.path) {
-				return data;
-			}
-			// Insert after the @agent paragraph
-			const endOffset = findAgentPromptEnd(
-				data,
-				this.settings.agentTag
+			proposedPaths.push(target.path);
+			new Notice(
+				`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`
 			);
-			if (endOffset === -1) {
-				return data + "\n\n" + callout + "\n";
-			}
-			return (
-				data.slice(0, endOffset + 1) +
-				"\n\n" +
-				callout +
-				"\n" +
-				data.slice(endOffset + 1)
+			console.log(
+				`Second Thoughts: proposed footnote for ${file.path} → ${target.path} (score: ${target.score.toFixed(3)})`
 			);
-		});
+		}
 
-		console.log(`Second Thoughts: proposed ideation for ${file.path}`);
+		if (proposedPaths.length > 0) {
+			shadow.proposed = [
+				...new Set([...shadow.proposed, ...proposedPaths]),
+			];
+			await saveShadowFile(this.app, file.path, shadow);
+		}
 	}
 
 	private async bootstrap() {
@@ -822,15 +721,23 @@ export default class SecondThoughtsPlugin extends Plugin {
 		}
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 
-		// Validate numeric settings
+		// Migrate legacy field names
+		if (this.settings.system1HopDepth && !data.footnoteLinkDepth) {
+			this.settings.footnoteLinkDepth = this.settings.system1HopDepth;
+		}
+		if (this.settings.topKPerCompartment && !data.topK) {
+			this.settings.topK = this.settings.topKPerCompartment;
+		}
+
+		// Validate settings
 		if (typeof this.settings.idleDebounceMinutes !== "number" || this.settings.idleDebounceMinutes <= 0) {
 			this.settings.idleDebounceMinutes = DEFAULT_SETTINGS.idleDebounceMinutes;
 		}
-		if (typeof this.settings.system1HopDepth !== "number" || this.settings.system1HopDepth < 1) {
-			this.settings.system1HopDepth = DEFAULT_SETTINGS.system1HopDepth;
+		if (typeof this.settings.footnoteLinkDepth !== "number" || this.settings.footnoteLinkDepth < 1) {
+			this.settings.footnoteLinkDepth = DEFAULT_SETTINGS.footnoteLinkDepth;
 		}
-		if (typeof this.settings.topKPerCompartment !== "number" || this.settings.topKPerCompartment < 1) {
-			this.settings.topKPerCompartment = DEFAULT_SETTINGS.topKPerCompartment;
+		if (typeof this.settings.topK !== "number" || this.settings.topK < 1) {
+			this.settings.topK = DEFAULT_SETTINGS.topK;
 		}
 		if (!Array.isArray(this.settings.excludedFolders)) {
 			this.settings.excludedFolders = DEFAULT_SETTINGS.excludedFolders;

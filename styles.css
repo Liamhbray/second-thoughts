@@ -1,0 +1,5 @@
+.st-ai-generated {
+    border-left: 3px solid var(--interactive-accent);
+    padding-left: 12px;
+    opacity: 0.85;
+}

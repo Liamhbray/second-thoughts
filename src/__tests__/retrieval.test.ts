@@ -3,7 +3,6 @@ import {
 	cosineSimilarity,
 	scopeBFS,
 	searchCompartment,
-	findAgentPrompt,
 } from "../retrieval";
 import { EmbeddingIndex, ShadowFile } from "../embedding";
 
@@ -156,42 +155,3 @@ describe("searchCompartment", () => {
 	});
 });
 
-// --- findAgentPrompt ---
-
-describe("findAgentPrompt", () => {
-	it("extracts paragraph containing @agent tag", () => {
-		const content = "Some intro.\n\nWhat connects stoicism to resilience? @agent\n\nOther text.";
-		const result = findAgentPrompt(content, "@agent");
-		expect(result).toBe("What connects stoicism to resilience?");
-	});
-
-	it("returns null when no tag present", () => {
-		expect(findAgentPrompt("No tag here.", "@agent")).toBeNull();
-	});
-
-	it("extracts multi-line paragraph", () => {
-		const content = "Intro.\n\nFirst line of question\nsecond line @agent\nthird line\n\nAfter.";
-		const result = findAgentPrompt(content, "@agent");
-		expect(result).toContain("First line of question");
-		expect(result).toContain("third line");
-		expect(result).not.toContain("@agent");
-	});
-
-	it("picks the last occurrence when multiple tags exist", () => {
-		const content = "First question @agent\n\nSecond question @agent";
-		const result = findAgentPrompt(content, "@agent");
-		expect(result).toBe("Second question");
-	});
-
-	it("handles tag at start of document", () => {
-		const content = "My question @agent";
-		const result = findAgentPrompt(content, "@agent");
-		expect(result).toBe("My question");
-	});
-
-	it("works with custom agent tag", () => {
-		const content = "Ask this @assistant please";
-		const result = findAgentPrompt(content, "@assistant");
-		expect(result).toBe("Ask this  please");
-	});
-});

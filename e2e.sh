@@ -13,7 +13,7 @@ POLL_INTERVAL=2
 
 # Seed vault notes used by tests
 SYSTEM1_NOTE="Biology/Blue Whales.md"       # dense links, good System 1 candidate
-SYSTEM2_NOTE="Culture/Moby-Dick.md"         # has @agent prompt
+SYSTEM2_NOTE="Culture/Moby-Dick.md"         # kept for cleanup
 SWITCH_NOTE="Ecology/Ocean Currents.md"     # switch-away target
 SEED_COUNT=17                               # expected note count in seed vault
 
@@ -235,9 +235,6 @@ wait_for "System 1 note indexed" \
   "$P.getDebugState().hasEntry('$SYSTEM1_NOTE')" \
   "$TIMEOUT"
 
-wait_for "System 2 note indexed" \
-  "$P.getDebugState().hasEntry('$SYSTEM2_NOTE')" \
-  "$TIMEOUT"
 
 # --- Test 3: System 1 — Footnote Proposal ---
 
@@ -251,17 +248,13 @@ await_for "Blue Whales gets footnote" \
   "return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('[^st-')" \
   "$TIMEOUT" || true
 
-# --- Test 4: System 2 — @agent Response ---
+# --- Test 4: Ideation command registered ---
 
 echo ""
-echo "=== Test 4: System 2 ==="
+echo "=== Test 4: Ideation Command ==="
 
-trigger_modify "$SYSTEM2_NOTE"
-switch_away
-
-await_for "Moby-Dick gets [!ideation] callout" \
-  "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
-  "$TIMEOUT" || true
+assert_true "Ideation command registered" \
+  "!!app.commands.commands['$PLUGIN:ideate']"
 
 # --- Test 5: Deduplication ---
 
@@ -292,18 +285,6 @@ echo "=== Test 7: AI Marker ==="
 
 assert_true "Footnote has *(Second Thoughts)* marker" \
   "(async () => { return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*') })()"
-
-# --- Test 8: Ideation (System 2 — unchanged) ---
-
-echo ""
-echo "=== Test 8: Ideation ==="
-
-trigger_modify "$SYSTEM2_NOTE"
-switch_away
-
-await_for "Moby-Dick gets [!ideation] callout" \
-  "return (await app.vault.adapter.read('$SYSTEM2_NOTE')).includes('[!ideation]')" \
-  "$TIMEOUT" || true
 
 # --- Cleanup ---
 
