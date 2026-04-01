@@ -8,6 +8,7 @@ export interface SecondThoughtsSettings {
 	topK: number;
 	excludedFolders: string[];
 	excludedTags: string[];
+	footnoteThreshold: number;
 	ideationModel: string;
 	ideasPerGeneration: number;
 	enableFootnotes: boolean;
@@ -26,6 +27,7 @@ export const DEFAULT_SETTINGS: SecondThoughtsSettings = {
 	topK: 5,
 	excludedFolders: [],
 	excludedTags: [],
+	footnoteThreshold: 0.5,
 	ideationModel: "gpt-4o-mini",
 	ideasPerGeneration: 3,
 	enableFootnotes: true,
@@ -141,6 +143,20 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 							this.plugin.settings.topK = parsed;
 							await this.plugin.saveSettings();
 						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Connection confidence")
+			.setDesc("Minimum similarity score (0.0–1.0) for a footnote to be generated. Lower = more footnotes, higher = fewer but stronger connections.")
+			.addSlider((slider) =>
+				slider
+					.setLimits(0.2, 0.9, 0.05)
+					.setValue(this.plugin.settings.footnoteThreshold)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.footnoteThreshold = value;
+						await this.plugin.saveSettings();
 					})
 			);
 

@@ -450,7 +450,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			this.settings.topK
 		);
 
-		// Collect all candidate paths and find the best unproposed one
+		// Rank all unproposed candidates by content similarity, filter by threshold
 		const allPaths = new Set([
 			...results.title.map((r) => r.path),
 			...results.tags.map((r) => r.path),
@@ -458,18 +458,9 @@ export default class SecondThoughtsPlugin extends Plugin {
 			...results.content.map((r) => r.path),
 		]);
 
-		const unproposed = [...allPaths].filter(
-			(p) => !shadow.proposed.includes(p)
-		);
-		if (unproposed.length === 0) {
-			console.log(
-				`Second Thoughts: all candidates already proposed for ${file.path}`
-			);
-			return;
-		}
-
-		// Pick the top unproposed candidate by content similarity
-		const ranked = unproposed
+		const threshold = this.settings.footnoteThreshold;
+		const targets = [...allPaths]
+			.filter((p) => !shadow.proposed.includes(p))
 			.map((p) => {
 				const s = this.index.get(p);
 				if (!s?.content?.length) return { path: p, score: 0 };
@@ -478,129 +469,154 @@ export default class SecondThoughtsPlugin extends Plugin {
 					score: cosineSimilarity(shadow.content, s.content),
 				};
 			})
+			.filter((r) => r.score >= threshold)
 			.sort((a, b) => b.score - a.score);
 
-		const bestTarget = ranked[0].path;
+		if (targets.length === 0) {
+			console.log(
+				`Second Thoughts: no candidates above threshold (${threshold}) for ${file.path}`
+			);
+			return;
+		}
 
 		const noteContent = await this.app.vault.read(file);
+		const proposedPaths: string[] = [];
 
-		// Generate a plain-text reason via LLM
-		const proposal = await generateFootnoteReason(
-			noteContent,
-			file.path,
-			bestTarget,
-			this.settings.apiKey,
-			this.app
-		);
+		for (const target of targets) {
+			// Re-check idle before each API call
+			if (this.activeFilePath === file.path) break;
+			if (this.isApiPaused()) break;
 
-		if (!proposal) {
-			console.log(
-				`Second Thoughts: LLM returned no footnote for ${file.path}`
-			);
-			return;
-		}
-
-		// Final idle re-check
-		if (this.activeFilePath === file.path) {
-			return;
-		}
-
-		// Find the best paragraph to attach the footnote to
-		const targetShadow = this.index.get(bestTarget);
-
-		this.ownWrites.add(file.path);
-		await this.app.vault.process(file, (data) => {
-			if (this.activeFilePath === file.path) {
-				return data;
-			}
-
-			// Guard: skip if this target is already in a footnote definition
-			if (data.includes(`[[${proposal.targetName}]]`) &&
-				data.match(new RegExp(`^\\[\\^st-\\d+\\]:.*\\[\\[${proposal.targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\]`, "m"))) {
-				return data;
-			}
-
-			const id = nextFootnoteId(data);
-			const { ref, def } = formatFootnote(
-				id,
-				proposal.targetName,
-				proposal.reason
+			const proposal = await generateFootnoteReason(
+				noteContent,
+				file.path,
+				target.path,
+				this.settings.apiKey,
+				this.app
 			);
 
-			// Find the best paragraph to place the reference
-			const lines = data.split("\n");
-			const paragraphs: { endLine: number; text: string }[] = [];
-			let paraStart = -1;
+			if (!proposal) continue;
+			this.recordApiSuccess();
 
-			for (let i = 0; i < lines.length; i++) {
-				const blank = lines[i].trim() === "";
-				const isHeading = lines[i].startsWith("#");
-				const isTag = lines[i].match(/^#\w/);
-				const isMeta =
-					lines[i].startsWith("[^") || lines[i].startsWith("---");
+			// Final idle re-check before write
+			if (this.activeFilePath === file.path) break;
 
-				if (!blank && !isHeading && !isMeta && !isTag) {
-					if (paraStart === -1) paraStart = i;
-				} else if (paraStart !== -1) {
-					paragraphs.push({
-						endLine: i - 1,
-						text: lines.slice(paraStart, i).join("\n"),
-					});
-					paraStart = -1;
+			this.ownWrites.add(file.path);
+			await this.app.vault.process(file, (data) => {
+				if (this.activeFilePath === file.path) return data;
+
+				// Guard: skip if target already in a footnote definition
+				const escaped = proposal.targetName.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					"\\$&"
+				);
+				if (
+					data.match(
+						new RegExp(
+							`^\\[\\^st-\\d+\\]:.*\\[\\[${escaped}\\]\\]`,
+							"m"
+						)
+					)
+				) {
+					return data;
 				}
-			}
-			if (paraStart !== -1) {
-				paragraphs.push({
-					endLine: lines.length - 1,
-					text: lines.slice(paraStart).join("\n"),
-				});
-			}
 
-			// Pick the paragraph most similar to the target note's content
-			let bestPara = paragraphs.length - 1;
-			if (targetShadow?.content?.length && paragraphs.length > 1) {
-				// Simple heuristic: pick the paragraph that shares the most
-				// keywords with the target note's title
-				const targetTitle = proposal.targetName.toLowerCase();
-				let bestScore = -1;
-				for (let i = 0; i < paragraphs.length; i++) {
-					const pText = paragraphs[i].text.toLowerCase();
-					// Score: count target title words found in paragraph
-					const words = targetTitle.split(/\s+/);
-					const score = words.filter((w) =>
-						pText.includes(w)
-					).length;
-					if (score > bestScore) {
-						bestScore = score;
-						bestPara = i;
+				const id = nextFootnoteId(data);
+				const { ref, def } = formatFootnote(
+					id,
+					proposal.targetName,
+					proposal.reason
+				);
+
+				const lines = data.split("\n");
+				const paragraphs: { endLine: number; text: string }[] = [];
+				let paraStart = -1;
+
+				for (let i = 0; i < lines.length; i++) {
+					const blank = lines[i].trim() === "";
+					const isHeading = lines[i].startsWith("#");
+					const isTag = lines[i].match(/^#\w/);
+					const isMeta =
+						lines[i].startsWith("[^") ||
+						lines[i].startsWith("---");
+
+					if (!blank && !isHeading && !isMeta && !isTag) {
+						if (paraStart === -1) paraStart = i;
+					} else if (paraStart !== -1) {
+						paragraphs.push({
+							endLine: i - 1,
+							text: lines.slice(paraStart, i).join("\n"),
+						});
+						paraStart = -1;
 					}
 				}
-			}
+				if (paraStart !== -1) {
+					paragraphs.push({
+						endLine: lines.length - 1,
+						text: lines.slice(paraStart).join("\n"),
+					});
+				}
 
-			if (paragraphs.length === 0) {
-				// No paragraphs found — append at end
-				const hasFootnotes = /^\[\^/.test(data.split("\n").slice(-5).join("\n"));
+				// Pick paragraph by keyword match to target title
+				let bestPara = paragraphs.length - 1;
+				if (paragraphs.length > 1) {
+					const titleWords = proposal.targetName
+						.toLowerCase()
+						.split(/\s+/);
+					let bestScore = -1;
+					for (let i = 0; i < paragraphs.length; i++) {
+						const pText = paragraphs[i].text.toLowerCase();
+						const score = titleWords.filter((w) =>
+							pText.includes(w)
+						).length;
+						if (score > bestScore) {
+							bestScore = score;
+							bestPara = i;
+						}
+					}
+				}
+
+				if (paragraphs.length === 0) {
+					const hasFootnotes = /^\[\^/.test(
+						data.split("\n").slice(-5).join("\n")
+					);
+					const separator = hasFootnotes ? "" : "\n\n---";
+					return (
+						data.trimEnd() +
+						ref +
+						separator +
+						"\n\n" +
+						def +
+						"\n"
+					);
+				}
+
+				const insertLine = paragraphs[bestPara].endLine;
+				lines[insertLine] = lines[insertLine] + ref;
+
+				const joined = lines.join("\n").trimEnd();
+				const hasFootnotes = /^\[\^/m.test(
+					joined.split("\n").slice(-5).join("\n")
+				);
 				const separator = hasFootnotes ? "" : "\n\n---";
-				return data.trimEnd() + ref + separator + "\n\n" + def + "\n";
-			}
+				return joined + separator + "\n\n" + def + "\n";
+			});
 
-			// Insert reference at end of best paragraph's last line
-			const insertLine = paragraphs[bestPara].endLine;
-			lines[insertLine] = lines[insertLine] + ref;
+			proposedPaths.push(target.path);
+			new Notice(
+				`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`
+			);
+			console.log(
+				`Second Thoughts: proposed footnote for ${file.path} → ${target.path} (score: ${target.score.toFixed(3)})`
+			);
+		}
 
-			// Append definition at bottom — add --- separator if first footnote
-			const joined = lines.join("\n").trimEnd();
-			const hasFootnotes = /^\[\^/m.test(joined.split("\n").slice(-5).join("\n"));
-			const separator = hasFootnotes ? "" : "\n\n---";
-			return joined + separator + "\n\n" + def + "\n";
-		});
-
-		// Track proposed target
-		shadow.proposed = [...new Set([...shadow.proposed, bestTarget])];
-		await saveShadowFile(this.app, file.path, shadow);
-
-		new Notice(`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`);
-		console.log(`Second Thoughts: proposed footnote for ${file.path}`);
+		if (proposedPaths.length > 0) {
+			shadow.proposed = [
+				...new Set([...shadow.proposed, ...proposedPaths]),
+			];
+			await saveShadowFile(this.app, file.path, shadow);
+		}
 	}
 
 	private async bootstrap() {
