@@ -79,7 +79,7 @@ export class IdeationModal extends Modal {
 			"background: var(--background-secondary); color: var(--text-normal);";
 		cancelBtn.addEventListener("click", () => this.close());
 
-		const generateBtn = btnRow.createEl("button", { text: "Generate" });
+		const generateBtn = btnRow.createEl("button", { text: "Ideate" });
 		generateBtn.style.cssText =
 			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
 			"border: none; " +
@@ -153,7 +153,7 @@ export class IdeationModal extends Modal {
 
 			loadingEl.textContent = "Generating ideas from " + diversePaths.length + " diverse notes...";
 
-			// Generate bridging ideas
+			// Ideate bridging ideas
 			const ideas = await generateBridgingIdeas(
 				selectionText || textToEmbed.substring(0, 2000),
 				instruction,
@@ -262,7 +262,7 @@ export class IdeationModal extends Modal {
 		// Wrap each line with `> ` for callout continuation
 		const lines = text.split("\n");
 		const body = lines.map((l) => "> " + l).join("\n");
-		const callout = "\n> [!idea] Bridging Idea\n" + body + "\n";
+		const callout = "\n> [!idea] Second Thoughts : Idea\n" + body + "\n";
 		const cursor = this.editor.getCursor();
 		this.editor.replaceRange(callout, cursor);
 	}
