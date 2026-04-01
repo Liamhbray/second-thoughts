@@ -15,6 +15,14 @@
 !README.md
 !LICENSE
 !styles.css
+!CHANGELOG.md
+!CONTRIBUTING.md
+!.editorconfig
+!version-bump.mjs
+
+# Whitelist: GitHub workflows
+!.github/
+!.github/**
 
 # Whitelist: source code
 !src/
