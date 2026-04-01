@@ -286,6 +286,18 @@ echo "=== Test 7: AI Marker ==="
 assert_true "Footnote has *(Second Thoughts)* marker" \
   "(async () => { return (await app.vault.adapter.read('$SYSTEM1_NOTE')).includes('*(Second Thoughts)*') })()"
 
+# ============================================================
+# ADD NEW FEATURE TESTS HERE
+#
+# Pattern:
+#   echo ""
+#   echo "=== Test N: Feature Name ==="
+#   assert_true "description" "js expression"
+#   await_for "description" "return async expression" "$TIMEOUT"
+#
+# See src/features/_template/TESTING.md for full guide.
+# ============================================================
+
 # --- Cleanup ---
 
 echo ""
