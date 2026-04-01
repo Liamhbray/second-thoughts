@@ -129,11 +129,32 @@ First run only: open the `seed-vault` folder as a vault in Obsidian (**Open anot
 
 ```bash
 npm run build     # Build and deploy to seed vault
-npm test          # Run unit tests (27 tests, pure functions)
-npm run e2e       # Run E2E tests against seed vault (requires Obsidian running)
+npm test          # Unit tests (pure functions, no Obsidian mocking)
+npm run e2e       # E2E tests against seed vault (requires Obsidian running)
 ```
 
 The E2E suite auto-opens the vault, bootstraps embeddings for 17 whale-themed notes, and tests the full pipeline: embedding, footnote generation, deduplication, and ideation command registration.
+
+### Architecture
+
+```
+src/
+  core/             — shared infrastructure
+    llm.ts          — LLMProvider interface + OpenAI implementation
+    embedding.ts    — compartment extraction, shadow files, index
+    similarity.ts   — cosine similarity, BFS scope, MMR selection
+    idle.ts         — idle detection with pluggable handlers
+    bootstrap.ts    — startup indexing
+    settings.ts     — settings interface and UI
+    services.ts     — Services type for dependency injection
+  features/
+    footnotes/      — automated footnote connections
+    ideation/       — modal-driven cross-cluster bridging
+    _template/      — documented template for adding new features
+  main.ts           — thin wiring (~260 lines)
+```
+
+Features are fully isolated — they only import from `core/` and never from each other. Adding a new feature means copying `_template/`, implementing the logic, and adding one `activate()` call in `main.ts`. See `_template/TESTING.md` for the testing guide.
 
 ## Privacy
 
