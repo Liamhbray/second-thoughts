@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hashPath, EmbeddingIndex, ShadowFile } from "../embedding";
+import { hashPath, EmbeddingIndex, ShadowFile } from "../core/embedding";
 
 // --- hashPath ---
 

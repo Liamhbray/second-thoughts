@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type SecondThoughtsPlugin from "./main";
+import type SecondThoughtsPlugin from "../main";
 
 export interface SecondThoughtsSettings {
 	apiKey: string;

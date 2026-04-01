@@ -3,8 +3,8 @@ import {
 	cosineSimilarity,
 	scopeBFS,
 	searchCompartment,
-} from "../retrieval";
-import { EmbeddingIndex, ShadowFile } from "../embedding";
+} from "../core/similarity";
+import { EmbeddingIndex, ShadowFile } from "../core/embedding";
 
 // --- cosineSimilarity ---
 

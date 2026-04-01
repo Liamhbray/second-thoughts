@@ -1,18 +1,16 @@
-import { App, Editor, Modal, TFile } from "obsidian";
-import {
-	embedText,
-	selectDiverseResults,
-	generateBridgingIdeas,
-	cosineSimilarity,
-} from "./retrieval";
-import { EmbeddingIndex } from "./embedding";
-import { SecondThoughtsSettings } from "./settings";
+import { App, Editor, Modal } from "obsidian";
+import { EmbeddingIndex } from "../../core/embedding";
+import { LLMProvider } from "../../core/llm";
+import { selectDiverseResults } from "../../core/similarity";
+import { SecondThoughtsSettings } from "../../core/settings";
+import { generateBridgingIdeas } from "./prompts";
 
 export class IdeationModal extends Modal {
 	private editor: Editor;
 	private selectedText: string;
 	private settings: SecondThoughtsSettings;
 	private index: EmbeddingIndex;
+	private llm: LLMProvider;
 	private filePath: string;
 
 	constructor(
@@ -21,6 +19,7 @@ export class IdeationModal extends Modal {
 		selection: string,
 		settings: SecondThoughtsSettings,
 		index: EmbeddingIndex,
+		llm: LLMProvider,
 		filePath: string
 	) {
 		super(app);
@@ -28,6 +27,7 @@ export class IdeationModal extends Modal {
 		this.selectedText = selection;
 		this.settings = settings;
 		this.index = index;
+		this.llm = llm;
 		this.filePath = filePath;
 	}
 
@@ -115,16 +115,14 @@ export class IdeationModal extends Modal {
 			"color: var(--text-muted); font-style: italic;";
 
 		try {
-			// Get the text to embed — selection or full note content
-			const textToEmbed = selectionText || await this.app.vault.adapter.read(this.filePath);
+			const textToEmbed =
+				selectionText ||
+				(await this.app.vault.adapter.read(this.filePath));
 
-			// Embed the selection/note on the fly
-			const queryVec = await embedText(
-				textToEmbed.substring(0, 8000),
-				this.settings.apiKey
+			const queryVec = await this.llm.embed(
+				textToEmbed.substring(0, 8000)
 			);
 
-			// Build candidate map: path → content embedding (excluding current note)
 			const candidateMap = new Map<string, number[]>();
 			for (const [path, shadow] of this.index.allEntries()) {
 				if (path === this.filePath) continue;
@@ -134,11 +132,12 @@ export class IdeationModal extends Modal {
 			}
 
 			if (candidateMap.size === 0) {
-				this.showError("No indexed notes to search. Wait for bootstrap to complete.");
+				this.showError(
+					"No indexed notes to search. Wait for bootstrap to complete."
+				);
 				return;
 			}
 
-			// Select diverse results via MMR
 			const diversePaths = selectDiverseResults(
 				queryVec,
 				candidateMap,
@@ -151,28 +150,34 @@ export class IdeationModal extends Modal {
 				return;
 			}
 
-			loadingEl.textContent = "Generating ideas from " + diversePaths.length + " diverse notes...";
+			loadingEl.textContent =
+				"Generating ideas from " +
+				diversePaths.length +
+				" diverse notes...";
 
-			// Ideate bridging ideas
 			const ideas = await generateBridgingIdeas(
 				selectionText || textToEmbed.substring(0, 2000),
 				instruction,
 				diversePaths,
-				this.settings.apiKey,
+				this.llm,
 				this.settings.ideationModel,
 				this.settings.ideasPerGeneration,
 				this.app
 			);
 
 			if (!ideas || ideas.length === 0) {
-				this.showError("No ideas generated. Try a different selection or prompt.");
+				this.showError(
+					"No ideas generated. Try a different selection or prompt."
+				);
 				return;
 			}
 
 			this.showIdeas(ideas);
 		} catch (e) {
 			console.error("Second Thoughts: ideation failed", e);
-			this.showError("Generation failed. Check the console for details.");
+			this.showError(
+				"Generation failed. Check the console for details."
+			);
 		}
 	}
 
@@ -183,11 +188,10 @@ export class IdeationModal extends Modal {
 		contentEl.createEl("h3", { text: "Second Thoughts" });
 		contentEl.createEl("p", {
 			text: ideas.length + " ideas from across your vault:",
-		}).style.cssText = "font-size: 12px; color: var(--text-muted); margin-bottom: 8px;";
+		}).style.cssText =
+			"font-size: 12px; color: var(--text-muted); margin-bottom: 8px;";
 
-		for (let i = 0; i < ideas.length; i++) {
-			const idea = ideas[i];
-
+		for (const idea of ideas) {
 			const ideaContainer = contentEl.createEl("div");
 			ideaContainer.style.cssText =
 				"border-left: 3px solid var(--interactive-accent); " +
@@ -209,7 +213,9 @@ export class IdeationModal extends Modal {
 				"border: none; " +
 				"background: var(--interactive-accent); color: var(--text-on-accent);";
 
-			const rejectBtn = ideaBtns.createEl("button", { text: "Dismiss" });
+			const rejectBtn = ideaBtns.createEl("button", {
+				text: "Dismiss",
+			});
 			rejectBtn.style.cssText =
 				"font-size: 11px; padding: 2px 10px; cursor: pointer; border-radius: 3px; " +
 				"border: 1px solid var(--background-modifier-border); " +
@@ -259,10 +265,10 @@ export class IdeationModal extends Modal {
 	}
 
 	private insertIdea(text: string) {
-		// Wrap each line with `> ` for callout continuation
 		const lines = text.split("\n");
 		const body = lines.map((l) => "> " + l).join("\n");
-		const callout = "\n> [!idea] Second Thoughts : Idea\n" + body + "\n";
+		const callout =
+			"\n> [!idea] Second Thoughts : Idea\n" + body + "\n";
 		const cursor = this.editor.getCursor();
 		this.editor.replaceRange(callout, cursor);
 	}

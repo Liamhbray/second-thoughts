@@ -1,9 +1,15 @@
-import { Editor, MarkdownView, Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
+import {
+	MarkdownView,
+	Notice,
+	Plugin,
+	TAbstractFile,
+	TFile,
+} from "obsidian";
 import {
 	SecondThoughtsSettings,
 	DEFAULT_SETTINGS,
 	SecondThoughtsSettingTab,
-} from "./settings";
+} from "./core/settings";
 import {
 	EmbeddingIndex,
 	extractCompartments,
@@ -12,88 +18,76 @@ import {
 	loadAllShadowFiles,
 	hashPath,
 	ShadowFile,
-} from "./embedding";
-import {
-	filterCandidates,
-	retrieveSimilar,
-	generateFootnoteReason,
-	cosineSimilarity,
-} from "./retrieval";
-import { IdeationModal } from "./ideation-modal";
-import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
+} from "./core/embedding";
+import { OpenAIProvider, LLMProvider } from "./core/llm";
+import { Services } from "./core/services";
+import { runFootnotes } from "./features/footnotes/pipeline";
+import { activateIdeation } from "./features/ideation/activate";
 
 export default class SecondThoughtsPlugin extends Plugin {
-	settings: SecondThoughtsSettings;
-	private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	settings!: SecondThoughtsSettings;
 	private activeFilePath: string | null = null;
-	private ownWrites: Set<string> = new Set();
-	private index: EmbeddingIndex = new EmbeddingIndex();
-	private processing: Set<string> = new Set();
+	private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private ownWrites = new Set<string>();
+	private index = new EmbeddingIndex();
+	private processing = new Set<string>();
 	private bootstrapComplete = false;
 	private consecutiveApiFailures = 0;
 	private apiPausedUntil = 0;
+	private llm!: LLMProvider;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new SecondThoughtsSettingTab(this.app, this));
+		this.llm = new OpenAIProvider(this.settings.apiKey);
 
+		// --- Shared event handlers ---
 
 		this.registerEvent(
 			this.app.vault.on("modify", (file: TAbstractFile) => {
 				if (file instanceof TFile && file.extension === "md") {
-					if (this.ownWrites.delete(file.path)) {
-						return;
-					}
+					if (this.ownWrites.delete(file.path)) return;
 					this.resetIdleTimer(file);
 				}
 			})
 		);
 
 		this.registerEvent(
-			this.app.workspace.on("file-open", (file: TFile | null) => {
+			this.app.workspace.on("file-open", (file) => {
 				this.activeFilePath = file?.path ?? null;
 			})
 		);
 
 		this.registerEvent(
-			this.app.workspace.on(
-				"active-leaf-change",
-				(leaf: WorkspaceLeaf | null) => {
-					if (leaf) {
-						const viewState = leaf.view?.getState();
-						const file =
-							viewState?.file
-								? this.app.vault.getAbstractFileByPath(
-										viewState.file
-								  )
-								: null;
-						this.activeFilePath =
-							file instanceof TFile ? file.path : null;
-					} else {
-						this.activeFilePath = null;
-					}
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf) {
+					const view =
+						this.app.workspace.getActiveViewOfType(MarkdownView);
+					this.activeFilePath = view?.file?.path ?? null;
 				}
-			)
+			})
 		);
 
-		// Command: open ideation modal
-		this.addCommand({
-			id: "ideate",
-			name: "Ask Second Thoughts",
-			editorCallback: (editor, view) => {
-				if (!view.file) return;
-				if (!this.settings.enableIdeation) return;
-				const selection = editor.getSelection();
-				new IdeationModal(
-					this.app,
-					editor,
-					selection,
-					this.settings,
-					this.index,
-					view.file.path
-				).open();
-			},
-		});
+		// --- Build services bag ---
+
+		const services: Services = {
+			app: this.app,
+			settings: this.settings,
+			index: this.index,
+			llm: this.llm,
+			getActiveFilePath: () => this.activeFilePath,
+			isApiPaused: () => this.isApiPaused(),
+			recordApiSuccess: () => this.recordApiSuccess(),
+			recordApiFailure: () => this.recordApiFailure(),
+			addOwnWrite: (path) => this.ownWrites.add(path),
+			embedNote: (file) => this.embedNote(file),
+		};
+
+		// --- Activate features ---
+
+		activateIdeation(this, services);
+
+		// --- Legacy callout commands (kept for existing callouts in vaults) ---
 
 		this.addCommand({
 			id: "accept-callout",
@@ -142,6 +136,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 			},
 		});
 
+		// --- Bootstrap ---
+
 		this.app.workspace.onLayoutReady(() => {
 			this.bootstrap();
 		});
@@ -162,11 +158,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 		console.log("Second Thoughts: unloaded");
 	}
 
+	// --- Idle detection ---
+
 	private resetIdleTimer(file: TFile) {
 		const existing = this.idleTimers.get(file.path);
-		if (existing) {
-			clearTimeout(existing);
-		}
+		if (existing) clearTimeout(existing);
 
 		const debounceMs = this.settings.idleDebounceMinutes * 60 * 1000;
 		const timer = setTimeout(() => {
@@ -177,11 +173,53 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.idleTimers.set(file.path, timer);
 	}
 
-	private isApiPaused(): boolean {
-		if (Date.now() < this.apiPausedUntil) {
-			return true;
+	private async onNoteIdle(file: TFile) {
+		if (this.activeFilePath === file.path) return;
+		if (!this.settings.apiKey) {
+			new Notice(
+				"Second Thoughts: API key required. Set it in plugin settings."
+			);
+			return;
 		}
-		return false;
+		if (this.processing.has(file.path)) return;
+		if (this.isApiPaused()) return;
+
+		try {
+			this.processing.add(file.path);
+			try {
+				await this.embedNote(file);
+				this.recordApiSuccess();
+
+				if (this.bootstrapComplete && this.settings.enableFootnotes) {
+					await runFootnotes(file, {
+						app: this.app,
+						settings: this.settings,
+						index: this.index,
+						llm: this.llm,
+						getActiveFilePath: () => this.activeFilePath,
+						isApiPaused: () => this.isApiPaused(),
+						recordApiSuccess: () => this.recordApiSuccess(),
+						recordApiFailure: () => this.recordApiFailure(),
+						addOwnWrite: (path) => this.ownWrites.add(path),
+						embedNote: (f) => this.embedNote(f),
+					});
+				}
+			} catch (e) {
+				this.recordApiFailure();
+				console.error(
+					`Second Thoughts: processing failed for ${file.path}`,
+					e
+				);
+			}
+		} finally {
+			this.processing.delete(file.path);
+		}
+	}
+
+	// --- API resilience ---
+
+	private isApiPaused(): boolean {
+		return Date.now() < this.apiPausedUntil;
 	}
 
 	private recordApiSuccess(): void {
@@ -192,63 +230,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 		this.consecutiveApiFailures++;
 		if (this.consecutiveApiFailures >= 5) {
 			this.apiPausedUntil = Date.now() + 60_000;
-			console.warn(
-				`Second Thoughts: ${this.consecutiveApiFailures} consecutive API failures — pausing for 60s`
-			);
+			console.warn("Second Thoughts: API paused for 60s after 5 failures");
 		}
 	}
 
-	private async onNoteIdle(file: TFile) {
-		try {
-			if (this.activeFilePath === file.path) {
-				return;
-			}
-			if (this.processing.has(file.path)) {
-				return;
-			}
-			if (!this.settings.apiKey) {
-				new Notice("Second Thoughts: API key required. Set it in plugin settings.");
-				return;
-			}
-			if (this.isApiPaused()) {
-				return;
-			}
-
-			this.processing.add(file.path);
-			try {
-				await this.embedNote(file);
-				this.recordApiSuccess();
-
-				// System 1 (footnotes): only after bootstrap complete
-				if (this.bootstrapComplete && this.settings.enableFootnotes) {
-					await this.runSystem1(file);
-				}
-			} catch (e) {
-				this.recordApiFailure();
-				console.error(`Second Thoughts: processing failed for ${file.path}`, e);
-			} finally {
-				this.processing.delete(file.path);
-			}
-		} catch (e) {
-			console.error(`Second Thoughts: unexpected error in onNoteIdle`, e);
-		}
-	}
-
-	private waitForMetadataCache(file: TFile): Promise<void> {
-		return new Promise((resolve) => {
-			const ref = this.app.metadataCache.on("changed", (changedFile) => {
-				if (changedFile.path === file.path) {
-					this.app.metadataCache.offref(ref);
-					resolve();
-				}
-			});
-			// If cache is already fresh, resolve immediately
-			if (this.app.metadataCache.getFileCache(file)) {
-				this.app.metadataCache.offref(ref);
-				resolve();
-			}
-		});
-	}
+	// --- Embedding ---
 
 	private async embedNote(file: TFile): Promise<void> {
 		await this.waitForMetadataCache(file);
@@ -256,7 +242,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 		const content = await this.app.vault.read(file);
 		const cache = this.app.metadataCache.getFileCache(file);
 		const compartments = extractCompartments(file, content, cache);
-		const vectors = await embedCompartments(compartments, this.settings.apiKey);
+		const vectors = await embedCompartments(compartments, this.llm);
 
 		const shadow: ShadowFile = {
 			mtime: file.stat.mtime,
@@ -267,368 +253,37 @@ export default class SecondThoughtsPlugin extends Plugin {
 			proposed: this.index.get(file.path)?.proposed ?? [],
 		};
 
-		await saveShadowFile(this.app, file.path, shadow);
 		this.index.set(file.path, shadow);
-
+		await saveShadowFile(this.app, file.path, shadow);
 		console.log(`Second Thoughts: embedded ${file.path}`);
 	}
 
-	private getActiveFile(): TFile | null {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		return view?.file ?? null;
-	}
-
-	private findCalloutAtLine(
-		content: string,
-		line: number
-	): { from: number; to: number } | null {
-		const callouts = findCallouts(content);
-		const lines = content.split("\n");
-		let pos = 0;
-		for (let i = 0; i < line && i < lines.length; i++) {
-			pos += lines[i].length + 1;
-		}
-		// Cursor position is within `pos` to `pos + lines[line].length`
-		const cursorPos = pos;
-		for (const c of callouts) {
-			if (cursorPos >= c.from && cursorPos <= c.to) {
-				return { from: c.from, to: c.to };
+	private waitForMetadataCache(file: TFile): Promise<void> {
+		return new Promise((resolve) => {
+			const ref = this.app.metadataCache.on("changed", (changedFile) => {
+				if (changedFile.path === file.path) {
+					this.app.metadataCache.offref(ref);
+					resolve();
+				}
+			});
+			if (this.app.metadataCache.getFileCache(file)) {
+				this.app.metadataCache.offref(ref);
+				resolve();
 			}
-		}
-		return null;
+		});
 	}
 
-	private async handleCalloutByType(
-		action: "accept" | "reject",
-		calloutType: string,
-		filePath: string
-	): Promise<void> {
-		const file = this.app.vault.getFileByPath(filePath);
-		if (!file) return;
-
-		try {
-			await this.app.vault.process(file, (data) => {
-				const callouts = findCallouts(data);
-				// Find the first callout matching the type
-				const callout = callouts.find((c) => c.type === calloutType);
-				if (!callout) return data;
-
-				if (action === "accept") {
-					const block = data.slice(callout.from, callout.to);
-					const lines = block.split("\n");
-					const contentLines: string[] = [];
-					for (let i = 0; i < lines.length; i++) {
-						if (i === 0) continue;
-						contentLines.push(lines[i].replace(/^>\s?/, ""));
-					}
-					const plainContent = contentLines.join("\n").trim();
-					return (
-						data.slice(0, callout.from) +
-						plainContent +
-						data.slice(callout.to)
-					);
-				} else {
-					let start = callout.from;
-					let end = callout.to;
-					while (end < data.length && data[end] === "\n") {
-						end++;
-					}
-					if (start > 0 && data[start - 1] === "\n") {
-						start--;
-						if (start > 0 && data[start - 1] === "\n") {
-							start--;
-						}
-					}
-					return data.slice(0, start) + data.slice(end);
-				}
-			});
-			this.ownWrites.add(file.path);
-			console.log(`Second Thoughts: ${action}ed callout in ${file.path}`);
-		} catch (e) {
-			console.error(`Second Thoughts: ${action} failed`, e);
-		}
-	}
-
-	private async handleAccept(from: number, to: number): Promise<void> {
-		const file = this.getActiveFile();
-		if (!file) return;
-
-		try {
-			await this.app.vault.process(file, (data) => {
-				const block = data.slice(from, to);
-				const lines = block.split("\n");
-				const contentLines: string[] = [];
-				for (let i = 0; i < lines.length; i++) {
-					if (i === 0) continue;
-					contentLines.push(lines[i].replace(/^>\s?/, ""));
-				}
-				const plainContent = contentLines.join("\n").trim();
-				return data.slice(0, from) + plainContent + data.slice(to);
-			});
-			console.log(`Second Thoughts: accepted callout in ${file.path}`);
-		} catch (e) {
-			console.error("Second Thoughts: accept failed", e);
-		}
-	}
-
-	private async handleReject(from: number, to: number): Promise<void> {
-		const file = this.getActiveFile();
-		if (!file) return;
-
-		try {
-			await this.app.vault.process(file, (data) => {
-				let start = from;
-				let end = to;
-				while (end < data.length && data[end] === "\n") {
-					end++;
-				}
-				if (start > 0 && data[start - 1] === "\n") {
-					start--;
-					if (start > 0 && data[start - 1] === "\n") {
-						start--;
-					}
-				}
-				return data.slice(0, start) + data.slice(end);
-			});
-			console.log(`Second Thoughts: rejected callout in ${file.path}`);
-		} catch (e) {
-			console.error("Second Thoughts: reject failed", e);
-		}
-	}
-
-	private async handleRejectAll(file: TFile): Promise<void> {
-		try {
-			await this.app.vault.process(file, (data) => {
-				const callouts = findCallouts(data);
-				if (callouts.length === 0) return data;
-
-				// Process in reverse to preserve offsets
-				let result = data;
-				for (let i = callouts.length - 1; i >= 0; i--) {
-					const c = callouts[i];
-					let start = c.from;
-					let end = c.to;
-					while (end < result.length && result[end] === "\n") {
-						end++;
-					}
-					if (start > 0 && result[start - 1] === "\n") {
-						start--;
-						if (start > 0 && result[start - 1] === "\n") {
-							start--;
-						}
-					}
-					result = result.slice(0, start) + result.slice(end);
-				}
-				return result;
-			});
-			console.log(`Second Thoughts: rejected all callouts in ${file.path}`);
-		} catch (e) {
-			console.error("Second Thoughts: reject-all failed", e);
-		}
-	}
-
-	private async runSystem1(file: TFile): Promise<void> {
-		const shadow = this.index.get(file.path);
-		if (!shadow) return;
-
-		const candidates = filterCandidates(
-			this.app,
-			file.path,
-			this.settings,
-			this.index
-		);
-
-		if (candidates.size === 0) {
-			console.log(`Second Thoughts: no candidates for ${file.path}`);
-			return;
-		}
-
-		const results = retrieveSimilar(
-			shadow,
-			candidates,
-			this.index,
-			this.settings.topK
-		);
-
-		// Rank all unproposed candidates by content similarity, filter by threshold
-		const allPaths = new Set([
-			...results.title.map((r) => r.path),
-			...results.tags.map((r) => r.path),
-			...results.links.map((r) => r.path),
-			...results.content.map((r) => r.path),
-		]);
-
-		const threshold = this.settings.footnoteThreshold;
-		const targets = [...allPaths]
-			.filter((p) => !shadow.proposed.includes(p))
-			.map((p) => {
-				const s = this.index.get(p);
-				if (!s?.content?.length) return { path: p, score: 0 };
-				return {
-					path: p,
-					score: cosineSimilarity(shadow.content, s.content),
-				};
-			})
-			.filter((r) => r.score >= threshold)
-			.sort((a, b) => b.score - a.score);
-
-		if (targets.length === 0) {
-			console.log(
-				`Second Thoughts: no candidates above threshold (${threshold}) for ${file.path}`
-			);
-			return;
-		}
-
-		const noteContent = await this.app.vault.read(file);
-		const proposedPaths: string[] = [];
-
-		for (const target of targets) {
-			// Re-check idle before each API call
-			if (this.activeFilePath === file.path) break;
-			if (this.isApiPaused()) break;
-
-			const proposal = await generateFootnoteReason(
-				noteContent,
-				file.path,
-				target.path,
-				this.settings.apiKey,
-				this.app
-			);
-
-			if (!proposal) continue;
-			this.recordApiSuccess();
-
-			// Final idle re-check before write
-			if (this.activeFilePath === file.path) break;
-
-			this.ownWrites.add(file.path);
-			await this.app.vault.process(file, (data) => {
-				if (this.activeFilePath === file.path) return data;
-
-				// Guard: skip if target already in a footnote definition
-				const escaped = proposal.targetName.replace(
-					/[.*+?^${}()|[\]\\]/g,
-					"\\$&"
-				);
-				if (
-					data.match(
-						new RegExp(
-							`^\\[\\^st-\\d+\\]:.*\\[\\[${escaped}\\]\\]`,
-							"m"
-						)
-					)
-				) {
-					return data;
-				}
-
-				const id = nextFootnoteId(data);
-				const { ref, def } = formatFootnote(
-					id,
-					proposal.targetName,
-					proposal.reason
-				);
-
-				const lines = data.split("\n");
-				const paragraphs: { endLine: number; text: string }[] = [];
-				let paraStart = -1;
-
-				for (let i = 0; i < lines.length; i++) {
-					const blank = lines[i].trim() === "";
-					const isHeading = lines[i].startsWith("#");
-					const isTag = lines[i].match(/^#\w/);
-					const isMeta =
-						lines[i].startsWith("[^") ||
-						lines[i].startsWith("---");
-
-					if (!blank && !isHeading && !isMeta && !isTag) {
-						if (paraStart === -1) paraStart = i;
-					} else if (paraStart !== -1) {
-						paragraphs.push({
-							endLine: i - 1,
-							text: lines.slice(paraStart, i).join("\n"),
-						});
-						paraStart = -1;
-					}
-				}
-				if (paraStart !== -1) {
-					paragraphs.push({
-						endLine: lines.length - 1,
-						text: lines.slice(paraStart).join("\n"),
-					});
-				}
-
-				// Pick paragraph by keyword match to target title
-				let bestPara = paragraphs.length - 1;
-				if (paragraphs.length > 1) {
-					const titleWords = proposal.targetName
-						.toLowerCase()
-						.split(/\s+/);
-					let bestScore = -1;
-					for (let i = 0; i < paragraphs.length; i++) {
-						const pText = paragraphs[i].text.toLowerCase();
-						const score = titleWords.filter((w) =>
-							pText.includes(w)
-						).length;
-						if (score > bestScore) {
-							bestScore = score;
-							bestPara = i;
-						}
-					}
-				}
-
-				if (paragraphs.length === 0) {
-					const hasFootnotes = /^\[\^/.test(
-						data.split("\n").slice(-5).join("\n")
-					);
-					const separator = hasFootnotes ? "" : "\n\n---";
-					return (
-						data.trimEnd() +
-						ref +
-						separator +
-						"\n\n" +
-						def +
-						"\n"
-					);
-				}
-
-				const insertLine = paragraphs[bestPara].endLine;
-				lines[insertLine] = lines[insertLine] + ref;
-
-				const joined = lines.join("\n").trimEnd();
-				const hasFootnotes = /^\[\^/m.test(
-					joined.split("\n").slice(-5).join("\n")
-				);
-				const separator = hasFootnotes ? "" : "\n\n---";
-				return joined + separator + "\n\n" + def + "\n";
-			});
-
-			proposedPaths.push(target.path);
-			new Notice(
-				`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`
-			);
-			console.log(
-				`Second Thoughts: proposed footnote for ${file.path} → ${target.path} (score: ${target.score.toFixed(3)})`
-			);
-		}
-
-		if (proposedPaths.length > 0) {
-			shadow.proposed = [
-				...new Set([...shadow.proposed, ...proposedPaths]),
-			];
-			await saveShadowFile(this.app, file.path, shadow);
-		}
-	}
+	// --- Bootstrap ---
 
 	private async bootstrap() {
 		try {
-		await this.bootstrapInner();
+			await this.bootstrapInner();
 		} catch (e) {
 			console.error("Second Thoughts: bootstrap failed", e);
 		}
 	}
 
 	private async bootstrapInner() {
-		// Wait for metadataCache to finish resolving all files
 		const alreadyResolved =
 			Object.keys(this.app.metadataCache.resolvedLinks).length > 0;
 		if (!alreadyResolved) {
@@ -640,10 +295,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			});
 		}
 
-		// Load existing shadow files into a temporary map keyed by FS path
 		const shadowMap = await loadAllShadowFiles(this.app);
-
-		// Scan vault and match shadow files by hash
 		const allNotes = this.app.vault.getMarkdownFiles();
 		const staleQueue: TFile[] = [];
 
@@ -665,14 +317,12 @@ export default class SecondThoughtsPlugin extends Plugin {
 			}
 		}
 
-		// Sort: recently modified first
 		staleQueue.sort((a, b) => b.stat.mtime - a.stat.mtime);
 
 		console.log(
 			`Second Thoughts: bootstrap — ${this.index.size()} cached, ${staleQueue.length} to embed`
 		);
 
-		// Process in batches of 50 with yields
 		const BATCH_SIZE = 50;
 		for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
 			const batch = staleQueue.slice(i, i + BATCH_SIZE);
@@ -689,7 +339,6 @@ export default class SecondThoughtsPlugin extends Plugin {
 					);
 				}
 			}
-			// Yield to main thread between batches
 			if (i + BATCH_SIZE < staleQueue.length) {
 				await new Promise((resolve) => setTimeout(resolve, 0));
 			}
@@ -701,39 +350,123 @@ export default class SecondThoughtsPlugin extends Plugin {
 		);
 	}
 
-	getDebugState() {
-		return {
-			indexSize: this.index.size(),
-			bootstrapComplete: this.bootstrapComplete,
-			processingPaths: [...this.processing],
-			idleTimerPaths: [...this.idleTimers.keys()],
-			hasEntry: (path: string) => !!this.index.get(path),
-			getProposed: (path: string) => this.index.get(path)?.proposed ?? [],
-		};
+	// --- Legacy callout helpers ---
+
+	private getActiveFile(): TFile | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		return view?.file ?? null;
 	}
 
-	async loadSettings() {
-		let data: any = {};
-		try {
-			data = (await this.loadData()) ?? {};
-		} catch (e) {
-			console.error("Second Thoughts: failed to load settings, using defaults", e);
+	private findCalloutAtLine(
+		content: string,
+		line: number
+	): { from: number; to: number } | null {
+		const callouts = findCallouts(content);
+		const lines = content.split("\n");
+		let pos = 0;
+		for (let i = 0; i < line && i < lines.length; i++) {
+			pos += lines[i].length + 1;
 		}
+		const cursorPos = pos;
+		for (const c of callouts) {
+			if (cursorPos >= c.from && cursorPos <= c.to) {
+				return { from: c.from, to: c.to };
+			}
+		}
+		return null;
+	}
+
+	private async handleAccept(from: number, to: number): Promise<void> {
+		const file = this.getActiveFile();
+		if (!file) return;
+		try {
+			await this.app.vault.process(file, (data) => {
+				const block = data.slice(from, to);
+				const lines = block.split("\n");
+				const contentLines: string[] = [];
+				for (let i = 0; i < lines.length; i++) {
+					if (i === 0) continue;
+					contentLines.push(lines[i].replace(/^>\s?/, ""));
+				}
+				const plainContent = contentLines.join("\n").trim();
+				return (
+					data.slice(0, from) + plainContent + data.slice(to)
+				);
+			});
+		} catch (e) {
+			console.error("Second Thoughts: accept failed", e);
+		}
+	}
+
+	private async handleReject(from: number, to: number): Promise<void> {
+		const file = this.getActiveFile();
+		if (!file) return;
+		try {
+			await this.app.vault.process(file, (data) => {
+				let start = from;
+				let end = to;
+				while (end < data.length && data[end] === "\n") end++;
+				if (start > 0 && data[start - 1] === "\n") {
+					start--;
+					if (start > 0 && data[start - 1] === "\n") start--;
+				}
+				return data.slice(0, start) + data.slice(end);
+			});
+		} catch (e) {
+			console.error("Second Thoughts: reject failed", e);
+		}
+	}
+
+	private async handleRejectAll(file: TFile): Promise<void> {
+		try {
+			await this.app.vault.process(file, (data) => {
+				const callouts = findCallouts(data);
+				if (callouts.length === 0) return data;
+				let result = data;
+				for (let i = callouts.length - 1; i >= 0; i--) {
+					const c = callouts[i];
+					let start = c.from;
+					let end = c.to;
+					while (end < result.length && result[end] === "\n") end++;
+					if (start > 0 && result[start - 1] === "\n") {
+						start--;
+						if (start > 0 && result[start - 1] === "\n") start--;
+					}
+					result = result.slice(0, start) + result.slice(end);
+				}
+				return result;
+			});
+		} catch (e) {
+			console.error("Second Thoughts: reject-all failed", e);
+		}
+	}
+
+	// --- Settings ---
+
+	async loadSettings() {
+		const data = await this.loadData();
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 
 		// Migrate legacy field names
-		if (this.settings.system1HopDepth && !data.footnoteLinkDepth) {
+		if (this.settings.system1HopDepth && !data?.footnoteLinkDepth) {
 			this.settings.footnoteLinkDepth = this.settings.system1HopDepth;
 		}
-		if (this.settings.topKPerCompartment && !data.topK) {
+		if (this.settings.topKPerCompartment && !data?.topK) {
 			this.settings.topK = this.settings.topKPerCompartment;
 		}
 
 		// Validate settings
-		if (typeof this.settings.idleDebounceMinutes !== "number" || this.settings.idleDebounceMinutes <= 0) {
-			this.settings.idleDebounceMinutes = DEFAULT_SETTINGS.idleDebounceMinutes;
+		if (
+			typeof this.settings.idleDebounceMinutes !== "number" ||
+			this.settings.idleDebounceMinutes <= 0
+		) {
+			this.settings.idleDebounceMinutes =
+				DEFAULT_SETTINGS.idleDebounceMinutes;
 		}
-		if (typeof this.settings.footnoteLinkDepth !== "number" || this.settings.footnoteLinkDepth < 1) {
+		if (
+			typeof this.settings.footnoteLinkDepth !== "number" ||
+			this.settings.footnoteLinkDepth < 1
+		) {
 			this.settings.footnoteLinkDepth = DEFAULT_SETTINGS.footnoteLinkDepth;
 		}
 		if (typeof this.settings.topK !== "number" || this.settings.topK < 1) {
@@ -750,4 +483,55 @@ export default class SecondThoughtsPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+
+	// --- Debug (E2E testing) ---
+
+	getDebugState() {
+		return {
+			indexSize: this.index.size(),
+			bootstrapComplete: this.bootstrapComplete,
+			processingPaths: [...this.processing],
+			idleTimerPaths: [...this.idleTimers.keys()],
+			hasEntry: (path: string) => !!this.index.get(path),
+			getProposed: (path: string) =>
+				this.index.get(path)?.proposed ?? [],
+		};
+	}
+}
+
+// --- Inline callout detection (used by legacy commands) ---
+
+interface CalloutRange {
+	type: "connection" | "ideation";
+	from: number;
+	to: number;
+}
+
+function findCallouts(text: string): CalloutRange[] {
+	const callouts: CalloutRange[] = [];
+	const lines = text.split("\n");
+	let pos = 0;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const match = line.match(/^>\s*\[!(connection|ideation)\]\s*$/);
+
+		if (match) {
+			const type = match[1] as "connection" | "ideation";
+			const from = pos;
+			let to = pos + line.length;
+
+			let j = i + 1;
+			while (j < lines.length && lines[j].startsWith("> ")) {
+				to += 1 + lines[j].length;
+				j++;
+			}
+
+			callouts.push({ type, from, to });
+		}
+
+		pos += line.length + 1;
+	}
+
+	return callouts;
 }

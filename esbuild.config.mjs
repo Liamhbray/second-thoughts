@@ -36,15 +36,27 @@ const context = await esbuild.context({
 
 // Inject API key from .env into seed vault data.json
 const dataJsonPath = `${devVaultPlugin}/data.json`;
-if (existsSync(".env") && existsSync(dataJsonPath)) {
+if (existsSync(".env")) {
 	const envLine = readFileSync(".env", "utf8").split("\n").find(l => l.startsWith("OPENAI_API_KEY="));
 	if (envLine) {
 		const key = envLine.split("=").slice(1).join("=").trim();
-		const data = JSON.parse(readFileSync(dataJsonPath, "utf8"));
-		if (data.apiKey !== key) {
-			data.apiKey = key;
-			writeFileSync(dataJsonPath, JSON.stringify(data, null, 2) + "\n");
-		}
+		const defaults = {
+			idleDebounceMinutes: 0.1,
+			footnoteLinkDepth: 3,
+			topK: 5,
+			footnoteThreshold: 0.5,
+			ideationModel: "gpt-4o-mini",
+			ideasPerGeneration: 3,
+			enableFootnotes: true,
+			enableIdeation: true,
+			excludedFolders: ["Scratch"],
+			excludedTags: [],
+		};
+		const data = existsSync(dataJsonPath)
+			? JSON.parse(readFileSync(dataJsonPath, "utf8"))
+			: {};
+		const merged = { ...defaults, ...data, apiKey: key };
+		writeFileSync(dataJsonPath, JSON.stringify(merged, null, 2) + "\n");
 	}
 }
 
