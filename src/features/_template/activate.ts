@@ -14,16 +14,18 @@
  *   2. Call activateFeatureName(this, services) in main.ts onload()
  *
  * Available via Services:
- *   - services.app          — Obsidian App (vault, workspace, metadataCache)
- *   - services.settings     — Plugin settings (SecondThoughtsSettings)
- *   - services.index        — EmbeddingIndex (in-memory note → vector cache)
- *   - services.llm          — LLMProvider (complete, embed, embedBatch)
- *   - services.getActiveFilePath() — Current active file path (or null)
- *   - services.isApiPaused()       — True if API is in backoff after failures
- *   - services.recordApiSuccess()  — Reset failure counter
- *   - services.recordApiFailure()  — Increment failure counter (pauses at 5)
- *   - services.addOwnWrite(path)   — Mark a file write as plugin-owned (skips idle timer)
- *   - services.embedNote(file)     — Embed a note's compartments and update the index
+ *   - services.app                   — Obsidian App (vault, workspace, metadataCache)
+ *   - services.settings              — Plugin settings (SecondThoughtsSettings)
+ *   - services.index                 — EmbeddingIndex (in-memory note → vector cache)
+ *   - services.llm                   — LLMProvider (complete, embed, embedBatch)
+ *   - services.idle                  — IdleDetector (addHandler to run on note idle)
+ *   - services.isBootstrapComplete() — True after all notes have been indexed
+ *   - services.getActiveFilePath()   — Current active file path (or null)
+ *   - services.isApiPaused()         — True if API is in backoff after failures
+ *   - services.recordApiSuccess()    — Reset failure counter
+ *   - services.recordApiFailure()    — Increment failure counter (pauses at 5)
+ *   - services.addOwnWrite(path)     — Mark a file write as plugin-owned (skips idle timer)
+ *   - services.embedNote(file)       — Embed a note's compartments and update the index
  *
  * Available from core/:
  *   - core/llm.ts        — LLMProvider interface, OpenAIProvider class

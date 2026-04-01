@@ -1,17 +1,18 @@
 import { Plugin } from "obsidian";
 import { Services } from "../../core/services";
+import { runFootnotes } from "./pipeline";
 
 /**
  * Activate the footnotes feature.
- * Currently a no-op — the idle trigger and footnote pipeline are wired
- * in main.ts because they share the idle detection infrastructure.
- * This module serves as the feature's entry point for future isolation.
+ * Registers an idle handler that generates footnotes when notes go idle.
  */
 export function activateFootnotes(
 	_plugin: Plugin,
-	_services: Services
+	services: Services
 ): void {
-	// Footnote pipeline is triggered from onNoteIdle in main.ts
-	// via runFootnotes(). Command registration is not needed —
-	// footnotes are fully automatic.
+	services.idle.addHandler(async (file) => {
+		if (!services.settings.enableFootnotes) return;
+		if (!services.isBootstrapComplete()) return;
+		await runFootnotes(file, services);
+	});
 }
