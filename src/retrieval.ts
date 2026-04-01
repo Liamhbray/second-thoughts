@@ -507,7 +507,8 @@ export function selectDiverseResults(
 function buildBridgingPrompt(
 	selectionText: string,
 	userInstruction: string,
-	diverseNotes: { title: string; content: string }[]
+	diverseNotes: { title: string; content: string }[],
+	ideaCount: number
 ): string {
 	const noteBlocks = diverseNotes
 		.map((n) => `"${n.title}": ${n.content.substring(0, 800)}`)
@@ -520,12 +521,10 @@ ${noteBlocks}
 They selected this passage:
 "${selectionText}"
 ${userInstruction ? `\nThey ask: ${userInstruction}\n` : ""}
-Suggest 3 novel ideas that emerge from combining these notes in unexpected ways. Each idea should be ONE sentence that connects at least 2 notes the user hasn't linked. Use [[NoteTitle]] wikilinks.
+Suggest ${ideaCount} novel ideas that emerge from combining these notes in unexpected ways. Each idea should be ONE sentence that connects at least 2 notes the user hasn't linked. Use [[NoteTitle]] wikilinks.
 
 Format:
-[1] idea
-[2] idea
-[3] idea`;
+${Array.from({ length: ideaCount }, (_, i) => `[${i + 1}] idea`).join("\n")}`;
 }
 
 /**
@@ -537,6 +536,7 @@ export async function generateBridgingIdeas(
 	diverseNotePaths: string[],
 	apiKey: string,
 	model: string,
+	ideaCount: number,
 	app: App
 ): Promise<string[] | null> {
 	const diverseNotes: { title: string; content: string }[] = [];
@@ -553,9 +553,10 @@ export async function generateBridgingIdeas(
 	const prompt = buildBridgingPrompt(
 		selectionText,
 		userInstruction,
-		diverseNotes
+		diverseNotes,
+		ideaCount
 	);
-	const text = await callLLM(prompt, apiKey, 300, model);
+	const text = await callLLM(prompt, apiKey, ideaCount * 100, model);
 	if (!text || text.trim().length === 0) return null;
 
 	// Split on [1] [2] [3] markers

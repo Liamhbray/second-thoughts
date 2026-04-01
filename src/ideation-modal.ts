@@ -165,6 +165,7 @@ export class IdeationModal extends Modal {
 				diversePaths,
 				this.settings.apiKey,
 				this.settings.ideationModel,
+				this.settings.ideasPerGeneration,
 				this.app
 			);
 

@@ -132,6 +132,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			name: "Ask Second Thoughts",
 			editorCallback: (editor, view) => {
 				if (!view.file) return;
+				if (!this.settings.enableIdeation) return;
 				const selection = editor.getSelection();
 				new IdeationModal(
 					this.app,
@@ -269,7 +270,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 				this.recordApiSuccess();
 
 				// System 1 (footnotes): only after bootstrap complete
-				if (this.bootstrapComplete) {
+				if (this.bootstrapComplete && this.settings.enableFootnotes) {
 					await this.runSystem1(file);
 				}
 			} catch (e) {
@@ -496,7 +497,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			shadow,
 			candidates,
 			this.index,
-			this.settings.topKPerCompartment
+			this.settings.topK
 		);
 
 		// Collect all candidate paths and find the best unproposed one
@@ -754,15 +755,23 @@ export default class SecondThoughtsPlugin extends Plugin {
 		}
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 
-		// Validate numeric settings
+		// Migrate legacy field names
+		if (this.settings.system1HopDepth && !data.footnoteLinkDepth) {
+			this.settings.footnoteLinkDepth = this.settings.system1HopDepth;
+		}
+		if (this.settings.topKPerCompartment && !data.topK) {
+			this.settings.topK = this.settings.topKPerCompartment;
+		}
+
+		// Validate settings
 		if (typeof this.settings.idleDebounceMinutes !== "number" || this.settings.idleDebounceMinutes <= 0) {
 			this.settings.idleDebounceMinutes = DEFAULT_SETTINGS.idleDebounceMinutes;
 		}
-		if (typeof this.settings.system1HopDepth !== "number" || this.settings.system1HopDepth < 1) {
-			this.settings.system1HopDepth = DEFAULT_SETTINGS.system1HopDepth;
+		if (typeof this.settings.footnoteLinkDepth !== "number" || this.settings.footnoteLinkDepth < 1) {
+			this.settings.footnoteLinkDepth = DEFAULT_SETTINGS.footnoteLinkDepth;
 		}
-		if (typeof this.settings.topKPerCompartment !== "number" || this.settings.topKPerCompartment < 1) {
-			this.settings.topKPerCompartment = DEFAULT_SETTINGS.topKPerCompartment;
+		if (typeof this.settings.topK !== "number" || this.settings.topK < 1) {
+			this.settings.topK = DEFAULT_SETTINGS.topK;
 		}
 		if (!Array.isArray(this.settings.excludedFolders)) {
 			this.settings.excludedFolders = DEFAULT_SETTINGS.excludedFolders;
