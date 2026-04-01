@@ -8,6 +8,8 @@ An Obsidian plugin that surfaces AI-generated connections and ideas from your va
 
 Runs automatically in the background. When you stop editing a note and navigate away, the plugin analyses its content against nearby notes (by link distance) and proposes connections as native Obsidian footnotes.
 
+The number of footnotes generated depends on the **connection confidence** threshold — only connections with similarity scores above this threshold are proposed. A well-connected note might receive several footnotes; an isolated one might receive none.
+
 A superscript reference is placed at the most relevant paragraph, with the footnote definition at the bottom:
 
 ```markdown
@@ -21,15 +23,22 @@ adaptations enabling cetaceans to withstand extreme depth. *(Second Thoughts)*
 
 The `*(Second Thoughts)*` marker identifies AI-generated footnotes. Remove it when you've reviewed the connection, or delete the footnote entirely if it's not useful.
 
-A notification appears when a footnote is added (e.g. `Sperm Whales → [[Whale Diving]]`).
+A notification appears for each footnote added (e.g. `Sperm Whales → [[Whale Diving]]`).
 
 ### Ideation — Cross-Cluster Bridging
 
 Invoke via command palette (`Cmd/Ctrl+P` → "Ask Second Thoughts"). Select text first for context, or run with no selection to use the full note.
 
-The plugin finds notes that are relevant to your selection but diverse from each other — pulling from different areas of your vault. It then generates concise bridging ideas that connect concepts you haven't explicitly linked.
+The plugin finds notes that are relevant to your selection but diverse from each other — pulling from different areas of your vault using Maximal Marginal Relevance. It then generates concise bridging ideas that connect concepts you haven't explicitly linked.
 
-Each idea can be individually accepted (inserted at cursor) or dismissed.
+Each idea can be individually accepted or dismissed. Accepted ideas are inserted at the cursor as `[!idea]` callouts:
+
+```markdown
+> [!idea] Second Thoughts : Idea
+> The migration patterns of [[Humpback Whales]] could be predicted
+> using [[Ocean Currents]] data combined with [[Whale Communication]]
+> acoustic monitoring.
+```
 
 ## Requirements
 
@@ -66,6 +75,7 @@ Each idea can be individually accepted (inserted at cursor) or dismissed.
 | Processing delay | 5 min | Time after last edit before footnote generation |
 | Footnote link depth | 3 | How many link hops to search for related notes |
 | Retrieval depth | 5 | Number of similar notes to consider per search |
+| Connection confidence | 0.5 | Minimum similarity (0.2–0.9) for a footnote. Lower = more footnotes, higher = fewer but stronger |
 
 ### Ideation
 
@@ -87,14 +97,15 @@ Each idea can be individually accepted (inserted at cursor) or dismissed.
 
 1. **Idle detection** — The plugin watches for file modifications and starts a debounce timer. When you stop editing and navigate away, processing begins.
 2. **Embedding** — Note content is split into four compartments (title, tags, links, content) and embedded via OpenAI's `text-embedding-3-small` model. Embeddings are cached as shadow files.
-3. **Retrieval** — Candidate notes are found via link-distance BFS, then ranked by cosine similarity.
-4. **Generation** — An LLM produces a short reason explaining the connection, formatted as a native Obsidian footnote.
+3. **Retrieval** — Candidate notes are found via link-distance BFS, then ranked by cosine similarity across all compartments.
+4. **Threshold filtering** — Only candidates with similarity above the connection confidence threshold proceed.
+5. **Generation** — For each qualifying candidate, an LLM produces a one-sentence reason explaining the connection. The plugin formats it as a native Obsidian footnote and inserts it at the most relevant paragraph.
 
 ### Ideation
 
-1. **Selection** — The user highlights text and runs the command. The selection is embedded on the fly.
-2. **Diverse retrieval** — Maximal Marginal Relevance (MMR) selects notes that are relevant to the selection but dissimilar to each other, pulling from different thought clusters.
-3. **Bridging** — The LLM generates concise ideas that connect concepts across the diverse source notes.
+1. **Selection** — The user highlights text and runs the command (or uses the full note if nothing is selected). The text is embedded on the fly.
+2. **Diverse retrieval** — Maximal Marginal Relevance (MMR) selects notes that are relevant to the selection but dissimilar to each other, pulling from different thought clusters in the vault.
+3. **Bridging** — The LLM generates concise ideas that connect concepts across the diverse source notes. Each idea is presented with Accept/Dismiss controls.
 
 All file writes use Obsidian's atomic `vault.process()` API. All network calls use `requestUrl()`. The plugin never modifies your existing content — footnotes and ideas are always additive.
 
