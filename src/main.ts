@@ -76,15 +76,54 @@ export default class SecondThoughtsPlugin extends Plugin {
 			)
 		);
 
-		// Post-processor: style %%st-idea%% blocks in reading mode
+		// Post-processor: style <!-- st-idea --> blocks in reading mode
 		this.registerMarkdownPostProcessor((el) => {
-			// Obsidian strips %% comments in reading mode, so the markers
-			// won't appear. Instead, we use a class-based approach:
-			// the markers are visible in source mode only. In reading mode,
-			// we detect paragraphs that were between markers by checking
-			// the raw source via a parent scan. This is a no-op for now —
-			// styling is handled by CM6 decorations or source-mode visibility.
-			// The primary UX is the blue border in source/live-preview mode.
+			// Walk comment nodes to find st-idea markers and wrap content between them
+			const walker = document.createTreeWalker(
+				el,
+				NodeFilter.SHOW_COMMENT
+			);
+			const startNodes: Comment[] = [];
+			while (walker.nextNode()) {
+				const comment = walker.currentNode as Comment;
+				if (comment.textContent?.trim() === "st-idea-start") {
+					startNodes.push(comment);
+				}
+			}
+
+			for (const startComment of startNodes) {
+				// Collect nodes between start and end comment
+				const wrapper = createEl("div", {
+					cls: "st-ai-generated",
+				});
+				let node = startComment.nextSibling;
+				const collected: Node[] = [];
+				let endComment: Comment | null = null;
+
+				while (node) {
+					if (
+						node.nodeType === Node.COMMENT_NODE &&
+						(node as Comment).textContent?.trim() === "st-idea-end"
+					) {
+						endComment = node as Comment;
+						break;
+					}
+					collected.push(node);
+					node = node.nextSibling;
+				}
+
+				if (endComment && collected.length > 0) {
+					startComment.parentNode?.insertBefore(
+						wrapper,
+						startComment
+					);
+					for (const n of collected) {
+						wrapper.appendChild(n);
+					}
+					startComment.remove();
+					endComment.remove();
+				}
+			}
 		});
 
 		// Command: open ideation modal

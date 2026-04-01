@@ -5,22 +5,23 @@ export interface SecondThoughtsSettings {
 	apiKey: string;
 	idleDebounceMinutes: number;
 	system1HopDepth: number;
-	system2ScopeDefault: "folder" | "vault";
 	topKPerCompartment: number;
 	excludedFolders: string[];
 	excludedTags: string[];
-	agentTag: string;
+	ideationModel: string;
+	// Legacy fields kept for backwards compat with existing data.json
+	system2ScopeDefault?: "folder" | "vault";
+	agentTag?: string;
 }
 
 export const DEFAULT_SETTINGS: SecondThoughtsSettings = {
 	apiKey: "",
 	idleDebounceMinutes: 5,
 	system1HopDepth: 3,
-	system2ScopeDefault: "folder",
 	topKPerCompartment: 5,
 	excludedFolders: [],
 	excludedTags: [],
-	agentTag: "@agent",
+	ideationModel: "gpt-4o-mini",
 };
 
 export class SecondThoughtsSettingTab extends PluginSettingTab {
@@ -88,15 +89,15 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("System 2 — default scope")
-			.setDesc("Default context boundary for @agent responses.")
+			.setName("Ideation model")
+			.setDesc("OpenAI model for idea generation. gpt-4o-mini is fast and cheap; gpt-4o is more creative.")
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOption("folder", "Folder")
-					.addOption("vault", "Vault")
-					.setValue(this.plugin.settings.system2ScopeDefault)
+					.addOption("gpt-4o-mini", "gpt-4o-mini")
+					.addOption("gpt-4o", "gpt-4o")
+					.setValue(this.plugin.settings.ideationModel)
 					.onChange(async (value) => {
-						this.plugin.settings.system2ScopeDefault = value as "folder" | "vault";
+						this.plugin.settings.ideationModel = value;
 						await this.plugin.saveSettings();
 					})
 			);
@@ -149,17 +150,5 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName("Agent tag")
-			.setDesc("The marker that triggers System 2 (ideation agent).")
-			.addText((text) =>
-				text
-					.setPlaceholder("@agent")
-					.setValue(this.plugin.settings.agentTag)
-					.onChange(async (value) => {
-						this.plugin.settings.agentTag = value;
-						await this.plugin.saveSettings();
-					})
-			);
 	}
 }

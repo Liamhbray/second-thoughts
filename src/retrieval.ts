@@ -256,7 +256,8 @@ function formatResultSections(results: RetrievalResults, app: App): string {
 async function callLLM(
 	prompt: string,
 	apiKey: string,
-	maxTokens = 500
+	maxTokens = 500,
+	model = "gpt-4o-mini"
 ): Promise<string | null> {
 	const response = await requestUrl({
 		url: "https://api.openai.com/v1/chat/completions",
@@ -266,7 +267,7 @@ async function callLLM(
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({
-			model: "gpt-4o-mini",
+			model,
 			messages: [{ role: "user", content: prompt }],
 			temperature: 0.7,
 			max_tokens: maxTokens,
@@ -425,5 +426,144 @@ export async function generateIdeation(
 		return null;
 	}
 	return text.trim();
+}
+
+// --- Cross-Cluster Bridging ---
+
+/**
+ * Embed a single text string via OpenAI text-embedding-3-small.
+ */
+export async function embedText(
+	text: string,
+	apiKey: string
+): Promise<number[]> {
+	const response = await requestUrl({
+		url: "https://api.openai.com/v1/embeddings",
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: "text-embedding-3-small",
+			input: [text],
+		}),
+	});
+	return response.json.data[0].embedding;
+}
+
+/**
+ * Select K diverse results from candidates using Maximal Marginal Relevance.
+ * Balances relevance to the query with diversity among selected results.
+ *
+ * @param queryVec - embedding of the user's selection
+ * @param candidates - path → content embedding vector
+ * @param k - number of results to select
+ * @param lambda - 0..1, higher = more relevance, lower = more diversity
+ */
+export function selectDiverseResults(
+	queryVec: number[],
+	candidates: Map<string, number[]>,
+	k: number,
+	lambda = 0.5
+): string[] {
+	const selected: string[] = [];
+	const remaining = new Map(candidates);
+
+	for (let i = 0; i < k && remaining.size > 0; i++) {
+		let bestPath = "";
+		let bestScore = -Infinity;
+
+		for (const [path, vec] of remaining) {
+			const relevance = cosineSimilarity(queryVec, vec);
+
+			let maxRedundancy = 0;
+			for (const selPath of selected) {
+				const selVec = candidates.get(selPath)!;
+				const sim = cosineSimilarity(vec, selVec);
+				if (sim > maxRedundancy) maxRedundancy = sim;
+			}
+
+			const score =
+				lambda * relevance - (1 - lambda) * maxRedundancy;
+			if (score > bestScore) {
+				bestScore = score;
+				bestPath = path;
+			}
+		}
+
+		if (bestPath) {
+			selected.push(bestPath);
+			remaining.delete(bestPath);
+		}
+	}
+
+	return selected;
+}
+
+/**
+ * Build the cross-cluster bridging ideation prompt.
+ */
+function buildBridgingPrompt(
+	selectionText: string,
+	userInstruction: string,
+	diverseNotes: { title: string; content: string }[]
+): string {
+	const noteBlocks = diverseNotes
+		.map((n) => `"${n.title}": ${n.content.substring(0, 800)}`)
+		.join("\n\n");
+
+	return `The user has these notes:
+
+${noteBlocks}
+
+They selected this passage:
+"${selectionText}"
+${userInstruction ? `\nThey ask: ${userInstruction}\n` : ""}
+Suggest 3 novel ideas that emerge from combining these notes in unexpected ways. Each idea should be ONE sentence that connects at least 2 notes the user hasn't linked. Use [[NoteTitle]] wikilinks.
+
+Format:
+[1] idea
+[2] idea
+[3] idea`;
+}
+
+/**
+ * Generate cross-cluster bridging ideas from diverse vault notes.
+ */
+export async function generateBridgingIdeas(
+	selectionText: string,
+	userInstruction: string,
+	diverseNotePaths: string[],
+	apiKey: string,
+	model: string,
+	app: App
+): Promise<string[] | null> {
+	const diverseNotes: { title: string; content: string }[] = [];
+	for (const path of diverseNotePaths) {
+		const file = app.vault.getAbstractFileByPath(path);
+		if (file instanceof TFile) {
+			const content = await app.vault.read(file);
+			diverseNotes.push({ title: file.basename, content });
+		}
+	}
+
+	if (diverseNotes.length === 0) return null;
+
+	const prompt = buildBridgingPrompt(
+		selectionText,
+		userInstruction,
+		diverseNotes
+	);
+	const text = await callLLM(prompt, apiKey, 300, model);
+	if (!text || text.trim().length === 0) return null;
+
+	// Split on [1] [2] [3] markers
+	const ideas = text
+		.split(/\[\d+\]\s*/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+
+	return ideas.length > 0 ? ideas : null;
 }
 
