@@ -8,11 +8,6 @@ import {
 import { EmbeddingIndex } from "./embedding";
 import { SecondThoughtsSettings } from "./settings";
 
-const ST_IDEA_START = "<!-- st-idea-start -->";
-const ST_IDEA_END = "<!-- st-idea-end -->";
-
-export { ST_IDEA_START, ST_IDEA_END };
-
 export class IdeationModal extends Modal {
 	private editor: Editor;
 	private selectedText: string;
@@ -264,9 +259,8 @@ export class IdeationModal extends Modal {
 	}
 
 	private insertIdea(text: string) {
-		const wrapped = "\n" + ST_IDEA_START + "\n" + text + "\n" + ST_IDEA_END + "\n";
 		const cursor = this.editor.getCursor();
-		this.editor.replaceRange(wrapped, cursor);
+		this.editor.replaceRange("\n" + text + "\n", cursor);
 	}
 
 	onClose() {

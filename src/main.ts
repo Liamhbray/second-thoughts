@@ -19,7 +19,7 @@ import {
 	generateFootnoteReason,
 	cosineSimilarity,
 } from "./retrieval";
-import { IdeationModal, ST_IDEA_START, ST_IDEA_END } from "./ideation-modal";
+import { IdeationModal } from "./ideation-modal";
 import { findCallouts, nextFootnoteId, formatFootnote } from "./decorations";
 
 export default class SecondThoughtsPlugin extends Plugin {
@@ -75,56 +75,6 @@ export default class SecondThoughtsPlugin extends Plugin {
 				}
 			)
 		);
-
-		// Post-processor: style <!-- st-idea --> blocks in reading mode
-		this.registerMarkdownPostProcessor((el) => {
-			// Walk comment nodes to find st-idea markers and wrap content between them
-			const walker = document.createTreeWalker(
-				el,
-				NodeFilter.SHOW_COMMENT
-			);
-			const startNodes: Comment[] = [];
-			while (walker.nextNode()) {
-				const comment = walker.currentNode as Comment;
-				if (comment.textContent?.trim() === "st-idea-start") {
-					startNodes.push(comment);
-				}
-			}
-
-			for (const startComment of startNodes) {
-				// Collect nodes between start and end comment
-				const wrapper = createEl("div", {
-					cls: "st-ai-generated",
-				});
-				let node = startComment.nextSibling;
-				const collected: Node[] = [];
-				let endComment: Comment | null = null;
-
-				while (node) {
-					if (
-						node.nodeType === Node.COMMENT_NODE &&
-						(node as Comment).textContent?.trim() === "st-idea-end"
-					) {
-						endComment = node as Comment;
-						break;
-					}
-					collected.push(node);
-					node = node.nextSibling;
-				}
-
-				if (endComment && collected.length > 0) {
-					startComment.parentNode?.insertBefore(
-						wrapper,
-						startComment
-					);
-					for (const n of collected) {
-						wrapper.appendChild(n);
-					}
-					startComment.remove();
-					endComment.remove();
-				}
-			}
-		});
 
 		// Command: open ideation modal
 		this.addCommand({
