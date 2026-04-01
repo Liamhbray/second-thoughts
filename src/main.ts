@@ -37,6 +37,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 		await this.loadSettings();
 		this.addSettingTab(new SecondThoughtsSettingTab(this.app, this));
 
+
 		this.registerEvent(
 			this.app.vault.on("modify", (file: TAbstractFile) => {
 				if (file instanceof TFile && file.extension === "md") {
@@ -92,10 +93,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 			name: "Ask Second Thoughts",
 			editorCallback: (editor, view) => {
 				if (!view.file) return;
+				const selection = editor.getSelection();
 				new IdeationModal(
 					this.app,
 					editor,
-					editor.getCursor(),
+					selection,
 					this.settings,
 					this.index,
 					view.file.path

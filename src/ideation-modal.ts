@@ -1,4 +1,4 @@
-import { App, Editor, EditorPosition, Modal } from "obsidian";
+import { App, Editor, Modal } from "obsidian";
 import {
 	filterCandidatesSystem2,
 	retrieveSimilar,
@@ -14,7 +14,7 @@ export { ST_IDEA_START, ST_IDEA_END };
 
 export class IdeationModal extends Modal {
 	private editor: Editor;
-	private cursor: EditorPosition;
+	private selectedText: string;
 	private settings: SecondThoughtsSettings;
 	private index: EmbeddingIndex;
 	private filePath: string;
@@ -22,14 +22,14 @@ export class IdeationModal extends Modal {
 	constructor(
 		app: App,
 		editor: Editor,
-		cursor: EditorPosition,
+		selection: string,
 		settings: SecondThoughtsSettings,
 		index: EmbeddingIndex,
 		filePath: string
 	) {
 		super(app);
 		this.editor = editor;
-		this.cursor = cursor;
+		this.selectedText = selection;
 		this.settings = settings;
 		this.index = index;
 		this.filePath = filePath;
@@ -41,10 +41,29 @@ export class IdeationModal extends Modal {
 
 		contentEl.createEl("h3", { text: "Second Thoughts" });
 
+		if (this.selectedText) {
+			contentEl.createEl("p", {
+				text: "Selected context:",
+				cls: "st-context-label",
+			}).style.cssText = "font-size: 12px; color: var(--text-muted); margin-bottom: 4px;";
+
+			const contextEl = document.createElement("div");
+			contextEl.innerText = this.selectedText;
+			contextEl.style.cssText =
+				"border-left: 3px solid var(--interactive-accent); " +
+				"padding: 8px 12px; margin-bottom: 12px; " +
+				"background: var(--background-secondary); border-radius: 4px; " +
+				"font-size: 13px; color: var(--text-muted); " +
+				"max-height: 100px; overflow-y: auto; white-space: pre-wrap;";
+			contentEl.appendChild(contextEl);
+		}
+
 		const input = contentEl.createEl("textarea", {
 			attr: {
-				placeholder: "Ask a question about your notes...",
-				rows: "4",
+				placeholder: this.selectedText
+					? "Add instructions (optional — press Enter to discover connections)..."
+					: "Ask a question about your notes...",
+				rows: "3",
 			},
 		});
 		input.style.cssText =
@@ -69,17 +88,28 @@ export class IdeationModal extends Modal {
 			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
 			"border: none; " +
 			"background: var(--interactive-accent); color: var(--text-on-accent);";
-		generateBtn.addEventListener("click", () => {
-			const prompt = input.value.trim();
+		const buildPrompt = (): string => {
+			const instruction = input.value.trim();
+			if (this.selectedText && instruction) {
+				return `The user highlighted this text: "${this.selectedText}"\n\nTheir instruction: ${instruction}`;
+			} else if (this.selectedText) {
+				return `The user highlighted this text: "${this.selectedText}"\n\nFind connections, related ideas, and insights from across their vault that relate to this passage.`;
+			}
+			return instruction;
+		};
+
+		const submit = () => {
+			const prompt = buildPrompt();
 			if (prompt) this.generate(prompt);
-		});
+		};
+
+		generateBtn.addEventListener("click", submit);
 
 		// Submit on Enter (Shift+Enter for newline)
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
-				const prompt = input.value.trim();
-				if (prompt) this.generate(prompt);
+				submit();
 			}
 		});
 
@@ -205,7 +235,8 @@ export class IdeationModal extends Modal {
 
 	private insert(text: string) {
 		const wrapped = `\n${ST_IDEA_START}\n${text}\n${ST_IDEA_END}\n`;
-		this.editor.replaceRange(wrapped, this.cursor);
+		const cursor = this.editor.getCursor();
+		this.editor.replaceRange(wrapped, cursor);
 	}
 
 	onClose() {
