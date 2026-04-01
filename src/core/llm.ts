@@ -31,7 +31,9 @@ export class OpenAIProvider implements LLMProvider {
 			}),
 		});
 
-		return response.json.choices?.[0]?.message?.content?.trim() || null;
+		const json = response.json;
+		if (!json?.choices?.length) return null;
+		return json.choices[0]?.message?.content?.trim() || null;
 	}
 
 	async embed(text: string): Promise<number[]> {
@@ -53,8 +55,11 @@ export class OpenAIProvider implements LLMProvider {
 			}),
 		});
 
-		const data = response.json;
-		const sorted = data.data.sort(
+		const json = response.json;
+		if (!json?.data?.length) {
+			throw new Error("Second Thoughts: embedding API returned no data");
+		}
+		const sorted = json.data.sort(
 			(a: { index: number }, b: { index: number }) => a.index - b.index
 		);
 		return sorted.map((item: { embedding: number[] }) => item.embedding);

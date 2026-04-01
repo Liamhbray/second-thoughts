@@ -1,4 +1,4 @@
-import { App, Editor, Modal } from "obsidian";
+import { App, Editor, Modal, TFile } from "obsidian";
 import { EmbeddingIndex } from "../../core/embedding";
 import { LLMProvider } from "../../core/llm";
 import { selectDiverseResults } from "../../core/similarity";
@@ -40,21 +40,17 @@ export class IdeationModal extends Modal {
 		if (this.selectedText) {
 			contentEl.createEl("p", {
 				text: "Selected context:",
-			}).style.cssText =
-				"font-size: 12px; color: var(--text-muted); margin-bottom: 4px;";
+				cls: "st-context-label",
+			});
 
-			const contextEl = document.createElement("div");
+			const contextEl = contentEl.createEl("div", {
+				cls: "st-context-box",
+			});
 			contextEl.innerText = this.selectedText;
-			contextEl.style.cssText =
-				"border-left: 3px solid var(--interactive-accent); " +
-				"padding: 8px 12px; margin-bottom: 12px; " +
-				"background: var(--background-secondary); border-radius: 4px; " +
-				"font-size: 13px; color: var(--text-muted); " +
-				"max-height: 100px; overflow-y: auto; white-space: pre-wrap;";
-			contentEl.appendChild(contextEl);
 		}
 
 		const input = contentEl.createEl("textarea", {
+			cls: "st-input",
 			attr: {
 				placeholder: this.selectedText
 					? "Add instructions (optional — press Enter to discover connections)..."
@@ -62,28 +58,19 @@ export class IdeationModal extends Modal {
 				rows: "3",
 			},
 		});
-		input.style.cssText =
-			"width: 100%; resize: vertical; padding: 8px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"border-radius: 4px; background: var(--background-primary); " +
-			"color: var(--text-normal); font-size: 14px;";
 
-		const btnRow = contentEl.createEl("div");
-		btnRow.style.cssText =
-			"display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end;";
+		const btnRow = contentEl.createEl("div", { cls: "st-btn-row" });
 
-		const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
-		cancelBtn.style.cssText =
-			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"background: var(--background-secondary); color: var(--text-normal);";
+		const cancelBtn = btnRow.createEl("button", {
+			text: "Cancel",
+			cls: "st-btn-secondary",
+		});
 		cancelBtn.addEventListener("click", () => this.close());
 
-		const generateBtn = btnRow.createEl("button", { text: "Ideate" });
-		generateBtn.style.cssText =
-			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
-			"border: none; " +
-			"background: var(--interactive-accent); color: var(--text-on-accent);";
+		const generateBtn = btnRow.createEl("button", {
+			text: "Ideate",
+			cls: "st-btn-primary",
+		});
 
 		const submit = () => {
 			const instruction = input.value.trim();
@@ -110,14 +97,14 @@ export class IdeationModal extends Modal {
 		contentEl.createEl("h3", { text: "Second Thoughts" });
 		const loadingEl = contentEl.createEl("p", {
 			text: "Finding connections across your vault...",
+			cls: "st-loading",
 		});
-		loadingEl.style.cssText =
-			"color: var(--text-muted); font-style: italic;";
 
 		try {
+			const noteFile = this.app.vault.getFileByPath(this.filePath);
 			const textToEmbed =
 				selectionText ||
-				(await this.app.vault.adapter.read(this.filePath));
+				(noteFile ? await this.app.vault.read(noteFile) : "");
 
 			const queryVec = await this.llm.embed(
 				textToEmbed.substring(0, 8000)
@@ -188,60 +175,45 @@ export class IdeationModal extends Modal {
 		contentEl.createEl("h3", { text: "Second Thoughts" });
 		contentEl.createEl("p", {
 			text: ideas.length + " ideas from across your vault:",
-		}).style.cssText =
-			"font-size: 12px; color: var(--text-muted); margin-bottom: 8px;";
+			cls: "st-ideas-count",
+		});
 
 		for (const idea of ideas) {
-			const ideaContainer = contentEl.createEl("div");
-			ideaContainer.style.cssText =
-				"border-left: 3px solid var(--interactive-accent); " +
-				"padding: 10px 12px; margin-bottom: 12px; " +
-				"background: var(--background-secondary); border-radius: 4px;";
+			const card = contentEl.createEl("div", { cls: "st-idea-card" });
 
-			const ideaText = ideaContainer.createEl("div");
-			ideaText.innerText = idea;
-			ideaText.style.cssText =
-				"font-size: 13px; line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px;";
+			const text = card.createEl("div", { cls: "st-idea-text" });
+			text.innerText = idea;
 
-			const ideaBtns = ideaContainer.createEl("div");
-			ideaBtns.style.cssText =
-				"display: flex; gap: 6px; justify-content: flex-end;";
+			const btns = card.createEl("div", { cls: "st-idea-btns" });
 
-			const acceptBtn = ideaBtns.createEl("button", { text: "Accept" });
-			acceptBtn.style.cssText =
-				"font-size: 11px; padding: 2px 10px; cursor: pointer; border-radius: 3px; " +
-				"border: none; " +
-				"background: var(--interactive-accent); color: var(--text-on-accent);";
-
-			const rejectBtn = ideaBtns.createEl("button", {
-				text: "Dismiss",
+			const acceptBtn = btns.createEl("button", {
+				text: "Accept",
+				cls: "st-btn-accept",
 			});
-			rejectBtn.style.cssText =
-				"font-size: 11px; padding: 2px 10px; cursor: pointer; border-radius: 3px; " +
-				"border: 1px solid var(--background-modifier-border); " +
-				"background: var(--background-secondary); color: var(--text-muted);";
+
+			const dismissBtn = btns.createEl("button", {
+				text: "Dismiss",
+				cls: "st-btn-dismiss",
+			});
 
 			acceptBtn.addEventListener("click", () => {
 				this.insertIdea(idea);
-				ideaContainer.style.opacity = "0.4";
+				card.style.opacity = "0.4";
 				acceptBtn.disabled = true;
-				rejectBtn.disabled = true;
+				dismissBtn.disabled = true;
 				acceptBtn.textContent = "Inserted";
 			});
 
-			rejectBtn.addEventListener("click", () => {
-				ideaContainer.style.display = "none";
+			dismissBtn.addEventListener("click", () => {
+				card.style.display = "none";
 			});
 		}
 
-		const closeRow = contentEl.createEl("div");
-		closeRow.style.cssText =
-			"display: flex; justify-content: flex-end; margin-top: 8px;";
-		const closeBtn = closeRow.createEl("button", { text: "Close" });
-		closeBtn.style.cssText =
-			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"background: var(--background-secondary); color: var(--text-normal);";
+		const closeRow = contentEl.createEl("div", { cls: "st-btn-row" });
+		const closeBtn = closeRow.createEl("button", {
+			text: "Close",
+			cls: "st-btn-secondary",
+		});
 		closeBtn.addEventListener("click", () => this.close());
 	}
 
@@ -250,17 +222,13 @@ export class IdeationModal extends Modal {
 		contentEl.empty();
 
 		contentEl.createEl("h3", { text: "Second Thoughts" });
-		const errEl = contentEl.createEl("p", { text: message });
-		errEl.style.cssText = "color: var(--text-error);";
+		contentEl.createEl("p", { text: message, cls: "st-error" });
 
-		const btnRow = contentEl.createEl("div");
-		btnRow.style.cssText =
-			"display: flex; justify-content: flex-end; margin-top: 12px;";
-		const closeBtn = btnRow.createEl("button", { text: "Close" });
-		closeBtn.style.cssText =
-			"padding: 6px 16px; cursor: pointer; border-radius: 4px; " +
-			"border: 1px solid var(--background-modifier-border); " +
-			"background: var(--background-secondary); color: var(--text-normal);";
+		const btnRow = contentEl.createEl("div", { cls: "st-btn-row" });
+		const closeBtn = btnRow.createEl("button", {
+			text: "Close",
+			cls: "st-btn-secondary",
+		});
 		closeBtn.addEventListener("click", () => this.close());
 	}
 
