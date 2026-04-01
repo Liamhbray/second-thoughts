@@ -259,8 +259,12 @@ export class IdeationModal extends Modal {
 	}
 
 	private insertIdea(text: string) {
+		// Wrap each line with `> ` for callout continuation
+		const lines = text.split("\n");
+		const body = lines.map((l) => "> " + l).join("\n");
+		const callout = "\n> [!idea] Bridging Idea\n" + body + "\n";
 		const cursor = this.editor.getCursor();
-		this.editor.replaceRange("\n" + text + "\n", cursor);
+		this.editor.replaceRange(callout, cursor);
 	}
 
 	onClose() {
