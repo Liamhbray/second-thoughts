@@ -98,20 +98,6 @@ export function hashPath(path: string): string {
 	return Math.abs(hash).toString(36);
 }
 
-export async function loadShadowFile(
-	app: App,
-	notePath: string
-): Promise<ShadowFile | null> {
-	const hash = hashPath(notePath);
-	const shadowPath = `${EMBEDDINGS_DIR}/${hash}.json`;
-	try {
-		const raw = await app.vault.adapter.read(shadowPath);
-		return JSON.parse(raw);
-	} catch {
-		return null;
-	}
-}
-
 export async function saveShadowFile(
 	app: App,
 	notePath: string,
@@ -120,19 +106,6 @@ export async function saveShadowFile(
 	const hash = hashPath(notePath);
 	const shadowPath = `${EMBEDDINGS_DIR}/${hash}.json`;
 	await app.vault.adapter.write(shadowPath, JSON.stringify(shadow));
-}
-
-export async function deleteShadowFile(
-	app: App,
-	notePath: string
-): Promise<void> {
-	const hash = hashPath(notePath);
-	const shadowPath = `${EMBEDDINGS_DIR}/${hash}.json`;
-	try {
-		await app.vault.adapter.remove(shadowPath);
-	} catch {
-		// File may not exist
-	}
 }
 
 export async function loadAllShadowFiles(

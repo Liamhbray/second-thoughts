@@ -3,12 +3,12 @@ import { EmbeddingIndex, ShadowFile } from "./embedding";
 
 // --- Types ---
 
-export interface SimilarityResult {
+interface SimilarityResult {
 	path: string;
 	score: number;
 }
 
-export interface RetrievalResults {
+interface RetrievalResults {
 	title: SimilarityResult[];
 	tags: SimilarityResult[];
 	links: SimilarityResult[];
