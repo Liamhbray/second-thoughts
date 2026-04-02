@@ -62,10 +62,12 @@ if (existsSync(".env")) {
 
 if (prod) {
 	await context.rebuild();
-	copyFileSync("main.js", `${devVaultPlugin}/main.js`);
-	copyFileSync("manifest.json", `${devVaultPlugin}/manifest.json`);
-	if (existsSync("styles.css")) {
-		copyFileSync("styles.css", `${devVaultPlugin}/styles.css`);
+	if (existsSync(devVaultPlugin)) {
+		copyFileSync("main.js", `${devVaultPlugin}/main.js`);
+		copyFileSync("manifest.json", `${devVaultPlugin}/manifest.json`);
+		if (existsSync("styles.css")) {
+			copyFileSync("styles.css", `${devVaultPlugin}/styles.css`);
+		}
 	}
 	process.exit(0);
 } else {
