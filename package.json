@@ -1,6 +1,6 @@
 {
 	"name": "second-thoughts",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"description": "AI-generated relational links and ideation responses drawn from your vault.",
 	"main": "main.js",
 	"scripts": {
