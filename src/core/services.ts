@@ -15,6 +15,7 @@ export interface Services {
 	isApiPaused: () => boolean;
 	recordApiSuccess: () => void;
 	recordApiFailure: () => void;
+	pauseApi: (ms: number) => void;
 	addOwnWrite: (path: string) => void;
 	embedNote: (file: TFile) => Promise<void>;
 }

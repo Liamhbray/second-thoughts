@@ -1,10 +1,11 @@
-import { App, TFile } from "obsidian";
+import { App, Notice, TFile } from "obsidian";
 import {
 	EmbeddingIndex,
 	EmbeddingCache,
 	loadAllEmbeddingCaches,
 	hashPath,
 } from "./embedding";
+import { LLMError } from "./llm";
 
 export interface BootstrapDeps {
 	app: App;
@@ -14,7 +15,10 @@ export interface BootstrapDeps {
 	embedNote: (file: TFile) => Promise<void>;
 	recordApiSuccess: () => void;
 	recordApiFailure: () => void;
+	pauseApi: (ms: number) => void;
 }
+
+const AUTH_FAILURE_PAUSE_MS = 10 * 60_000;
 
 /**
  * Load embedding caches, detect stale notes, and re-embed them.
@@ -62,15 +66,29 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 		`Second Thoughts: bootstrap — ${index.size()} cached, ${staleQueue.length} to embed`
 	);
 
+	if (staleQueue.length > 0 && !deps.apiKey) {
+		new Notice(
+			`Second Thoughts: ${staleQueue.length} notes need indexing. Set your OpenAI API key in plugin settings.`
+		);
+		return;
+	}
+
 	const BATCH_SIZE = 50;
-	for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
+	outer: for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
 		const batch = staleQueue.slice(i, i + BATCH_SIZE);
 		for (const file of batch) {
-			if (!deps.apiKey || deps.isApiPaused()) break;
+			if (!deps.apiKey || deps.isApiPaused()) break outer;
 			try {
 				await deps.embedNote(file);
 				deps.recordApiSuccess();
 			} catch (e) {
+				if (e instanceof LLMError && e.kind === "auth") {
+					deps.pauseApi(AUTH_FAILURE_PAUSE_MS);
+					new Notice(
+						"Second Thoughts: API key rejected. Check plugin settings."
+					);
+					break outer;
+				}
 				deps.recordApiFailure();
 				console.error(
 					`Second Thoughts: bootstrap embed failed for ${file.path}`,

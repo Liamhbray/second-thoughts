@@ -6,8 +6,9 @@ import {
 	cosineSimilarity,
 } from "../../core/similarity";
 import { saveEmbeddingCache } from "../../core/embedding";
+import { LLMError } from "../../core/llm";
 import { nextFootnoteId, formatFootnote } from "./format";
-import { generateFootnoteReason } from "./prompts";
+import { generateFootnoteReason, FootnoteProposal } from "./prompts";
 
 /**
  * Run the footnote pipeline for an idle note.
@@ -72,13 +73,30 @@ export async function runFootnotes(
 		if (services.getActiveFilePath() === file.path) break;
 		if (services.isApiPaused()) break;
 
-		const proposal = await generateFootnoteReason(
-			noteContent,
-			file.path,
-			target.path,
-			services.llm,
-			app
-		);
+		let proposal: FootnoteProposal | null;
+		try {
+			proposal = await generateFootnoteReason(
+				noteContent,
+				file.path,
+				target.path,
+				services.llm,
+				app
+			);
+		} catch (e) {
+			if (e instanceof LLMError && e.kind === "auth") {
+				services.pauseApi(10 * 60_000);
+				new Notice(
+					"Second Thoughts: API key rejected. Check plugin settings."
+				);
+				return;
+			}
+			services.recordApiFailure();
+			console.error(
+				`Second Thoughts: footnote generation failed for ${file.path} → ${target.path}`,
+				e
+			);
+			continue;
+		}
 
 		if (!proposal) continue;
 		services.recordApiSuccess();

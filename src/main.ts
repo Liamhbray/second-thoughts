@@ -1,4 +1,4 @@
-import { Plugin, TFile } from "obsidian";
+import { Notice, Plugin, TFile } from "obsidian";
 import {
 	SecondThoughtsSettings,
 	DEFAULT_SETTINGS,
@@ -11,7 +11,7 @@ import {
 	saveEmbeddingCache,
 	EmbeddingCache,
 } from "./core/embedding";
-import { OpenAIProvider, LLMProvider } from "./core/llm";
+import { OpenAIProvider, LLMProvider, LLMError } from "./core/llm";
 import { Services } from "./core/services";
 import { IdleDetector } from "./core/idle";
 import { runBootstrap } from "./core/bootstrap";
@@ -31,13 +31,16 @@ export default class SecondThoughtsPlugin extends Plugin {
 	private llm!: LLMProvider;
 	private idle!: IdleDetector;
 	private bootstrapComplete = false;
+	private bootstrapInFlight = false;
 	private consecutiveApiFailures = 0;
 	private apiPausedUntil = 0;
+	private lastBootstrapKey = "";
+	private bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new SecondThoughtsSettingTab(this.app, this));
-		this.llm = new OpenAIProvider(this.settings.apiKey);
+		this.llm = new OpenAIProvider(() => this.settings.apiKey);
 
 		// --- Idle detection ---
 		this.idle = new IdleDetector(this, this.settings);
@@ -45,8 +48,23 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 		// Embedding is the first idle handler — runs before features
 		this.idle.addHandler(async (file) => {
-			await this.embedNote(file);
-			this.recordApiSuccess();
+			try {
+				await this.embedNote(file);
+				this.recordApiSuccess();
+			} catch (e) {
+				if (e instanceof LLMError && e.kind === "auth") {
+					this.pauseApi(10 * 60_000);
+					new Notice(
+						"Second Thoughts: API key rejected. Check plugin settings."
+					);
+					return;
+				}
+				this.recordApiFailure();
+				console.error(
+					`Second Thoughts: embed failed for ${file.path}`,
+					e
+				);
+			}
 		});
 
 		// --- Build services ---
@@ -61,6 +79,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			isApiPaused: () => this.isApiPaused(),
 			recordApiSuccess: () => this.recordApiSuccess(),
 			recordApiFailure: () => this.recordApiFailure(),
+			pauseApi: (ms) => this.pauseApi(ms),
 			addOwnWrite: (path) => this.idle.addOwnWrite(path),
 			embedNote: (file) => this.embedNote(file),
 		};
@@ -115,32 +134,69 @@ export default class SecondThoughtsPlugin extends Plugin {
 		});
 
 		// --- Bootstrap ---
-		this.app.workspace.onLayoutReady(async () => {
-			try {
-				await runBootstrap({
-					app: this.app,
-					index: this.index,
-					apiKey: this.settings.apiKey,
-					isApiPaused: () => this.isApiPaused(),
-					embedNote: (file) => this.embedNote(file),
-					recordApiSuccess: () => this.recordApiSuccess(),
-					recordApiFailure: () => this.recordApiFailure(),
-				});
-				this.bootstrapComplete = true;
-			} catch (e) {
-				console.error("Second Thoughts: bootstrap failed", e);
-			}
+		this.app.workspace.onLayoutReady(() => {
+			void this.runBootstrapOnce(this.settings.apiKey);
 		});
 
 		console.log("Second Thoughts: loaded");
 	}
 
 	onunload() {
+		if (this.bootstrapRetryTimer) {
+			clearTimeout(this.bootstrapRetryTimer);
+			this.bootstrapRetryTimer = null;
+		}
 		this.idle.destroy();
 		this.index.clear();
 		this.consecutiveApiFailures = 0;
 		this.apiPausedUntil = 0;
 		console.log("Second Thoughts: unloaded");
+	}
+
+	/**
+	 * Re-run bootstrap after the API key changes from empty/invalid to a
+	 * new value, so indexing can catch up without a plugin reload.
+	 * Debounced to avoid firing on every keystroke.
+	 */
+	onApiKeyChanged(): void {
+		const key = this.settings.apiKey;
+		if (!key || key === this.lastBootstrapKey) return;
+		if (this.bootstrapRetryTimer) clearTimeout(this.bootstrapRetryTimer);
+		this.bootstrapRetryTimer = setTimeout(() => {
+			this.bootstrapRetryTimer = null;
+			void this.runBootstrapOnce(this.settings.apiKey);
+		}, 2000);
+	}
+
+	/**
+	 * Run bootstrap guarded against concurrent invocations.
+	 * lastBootstrapKey is only recorded on successful completion — a failed
+	 * run leaves it unchanged so the user can retry the same key.
+	 */
+	private async runBootstrapOnce(key: string): Promise<void> {
+		if (this.bootstrapInFlight) return;
+		if (!key || key === this.lastBootstrapKey) return;
+		this.bootstrapInFlight = true;
+		this.consecutiveApiFailures = 0;
+		this.apiPausedUntil = 0;
+		try {
+			await runBootstrap({
+				app: this.app,
+				index: this.index,
+				apiKey: key,
+				isApiPaused: () => this.isApiPaused(),
+				embedNote: (file) => this.embedNote(file),
+				recordApiSuccess: () => this.recordApiSuccess(),
+				recordApiFailure: () => this.recordApiFailure(),
+				pauseApi: (ms) => this.pauseApi(ms),
+			});
+			this.lastBootstrapKey = key;
+			this.bootstrapComplete = true;
+		} catch (e) {
+			console.error("Second Thoughts: bootstrap failed", e);
+		} finally {
+			this.bootstrapInFlight = false;
+		}
 	}
 
 	// --- API resilience ---
@@ -156,11 +212,21 @@ export default class SecondThoughtsPlugin extends Plugin {
 	private recordApiFailure(): void {
 		this.consecutiveApiFailures++;
 		if (this.consecutiveApiFailures >= 5) {
+			const wasPaused = this.isApiPaused();
 			this.apiPausedUntil = Date.now() + 60_000;
-			console.warn(
-				"Second Thoughts: API paused for 60s after 5 failures"
-			);
+			if (!wasPaused) {
+				new Notice(
+					"Second Thoughts: pausing API calls for 60s after repeated failures."
+				);
+				console.warn(
+					"Second Thoughts: API paused for 60s after 5 failures"
+				);
+			}
 		}
+	}
+
+	private pauseApi(ms: number): void {
+		this.apiPausedUntil = Math.max(this.apiPausedUntil, Date.now() + ms);
 	}
 
 	// --- Embedding ---
