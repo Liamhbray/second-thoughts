@@ -1,6 +1,6 @@
 import { App, Editor, EditorPosition, Modal, TFile } from "obsidian";
 import { EmbeddingIndex } from "../../core/embedding";
-import { LLMProvider } from "../../core/llm";
+import { LLMError, LLMProvider } from "../../core/llm";
 import { selectDiverseResults } from "../../core/similarity";
 import { SecondThoughtsSettings } from "../../core/settings";
 import { generateBridgingIdeas } from "./prompts";
@@ -168,9 +168,7 @@ export class IdeationModal extends Modal {
 			this.showIdeas(ideas);
 		} catch (e) {
 			console.error("Second Thoughts: ideation failed", e);
-			this.showError(
-				"Generation failed. Check the console for details."
-			);
+			this.showError(describeError(e));
 		}
 	}
 
@@ -255,4 +253,20 @@ export class IdeationModal extends Modal {
 	onClose() {
 		this.contentEl.empty();
 	}
+}
+
+function describeError(e: unknown): string {
+	if (e instanceof LLMError) {
+		switch (e.kind) {
+			case "auth":
+				return "API key rejected by OpenAI. Check your key in plugin settings.";
+			case "rate_limit":
+				return "OpenAI rate limit hit. Try again in a moment.";
+			case "network":
+				return "Could not reach OpenAI. Check your connection.";
+			case "server":
+				return "OpenAI server error. Try again later.";
+		}
+	}
+	return "Generation failed. Check the console for details.";
 }

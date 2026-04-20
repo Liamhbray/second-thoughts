@@ -1,4 +1,22 @@
-import { requestUrl } from "obsidian";
+import { requestUrl, RequestUrlResponse } from "obsidian";
+
+export type LLMErrorKind =
+	| "auth"
+	| "rate_limit"
+	| "server"
+	| "network"
+	| "unknown";
+
+export class LLMError extends Error {
+	constructor(
+		public kind: LLMErrorKind,
+		message: string,
+		public status?: number
+	) {
+		super(message);
+		this.name = "LLMError";
+	}
+}
 
 export interface LLMProvider {
 	complete(
@@ -10,26 +28,21 @@ export interface LLMProvider {
 }
 
 export class OpenAIProvider implements LLMProvider {
-	constructor(private apiKey: string) {}
+	constructor(private getApiKey: () => string) {}
 
 	async complete(
 		prompt: string,
 		opts: { maxTokens?: number; model?: string } = {}
 	): Promise<string | null> {
-		const response = await requestUrl({
-			url: "https://api.openai.com/v1/chat/completions",
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${this.apiKey}`,
-			},
-			body: JSON.stringify({
+		const response = await this.post(
+			"https://api.openai.com/v1/chat/completions",
+			{
 				model: opts.model || "gpt-4o-mini",
 				messages: [{ role: "user", content: prompt }],
 				temperature: 0.7,
 				max_tokens: opts.maxTokens || 500,
-			}),
-		});
+			}
+		);
 
 		const json = response.json;
 		if (!json?.choices?.length) return null;
@@ -42,26 +55,75 @@ export class OpenAIProvider implements LLMProvider {
 	}
 
 	async embedBatch(texts: string[]): Promise<number[][]> {
-		const response = await requestUrl({
-			url: "https://api.openai.com/v1/embeddings",
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${this.apiKey}`,
-			},
-			body: JSON.stringify({
+		const response = await this.post(
+			"https://api.openai.com/v1/embeddings",
+			{
 				model: "text-embedding-3-small",
 				input: texts,
-			}),
-		});
+			}
+		);
 
 		const json = response.json;
 		if (!json?.data?.length) {
-			throw new Error("Second Thoughts: embedding API returned no data");
+			throw new LLMError("unknown", "Embedding API returned no data");
 		}
 		const sorted = json.data.sort(
 			(a: { index: number }, b: { index: number }) => a.index - b.index
 		);
 		return sorted.map((item: { embedding: number[] }) => item.embedding);
+	}
+
+	private async post(
+		url: string,
+		body: unknown
+	): Promise<RequestUrlResponse> {
+		let response: RequestUrlResponse;
+		try {
+			response = await requestUrl({
+				url,
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${this.getApiKey()}`,
+				},
+				body: JSON.stringify(body),
+				throw: false,
+			});
+		} catch (e) {
+			throw new LLMError(
+				"network",
+				e instanceof Error ? e.message : String(e)
+			);
+		}
+
+		const { status } = response;
+		if (status >= 200 && status < 300) return response;
+
+		if (status === 401 || status === 403) {
+			throw new LLMError(
+				"auth",
+				"OpenAI rejected the API key",
+				status
+			);
+		}
+		if (status === 429) {
+			throw new LLMError(
+				"rate_limit",
+				"OpenAI rate limit exceeded",
+				status
+			);
+		}
+		if (status >= 500) {
+			throw new LLMError(
+				"server",
+				`OpenAI server error (${status})`,
+				status
+			);
+		}
+		throw new LLMError(
+			"unknown",
+			`OpenAI request failed (${status})`,
+			status
+		);
 	}
 }

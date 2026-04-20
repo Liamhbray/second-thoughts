@@ -1,4 +1,4 @@
-import { MarkdownView, Plugin } from "obsidian";
+import { Notice, Plugin } from "obsidian";
 import { Services } from "../../core/services";
 import { IdeationModal } from "./modal";
 
@@ -16,6 +16,12 @@ export function activateIdeation(
 		editorCallback: (editor, view) => {
 			if (!view.file) return;
 			if (!services.settings.enableIdeation) return;
+			if (!services.settings.apiKey) {
+				new Notice(
+					"Second Thoughts: API key required. Set it in plugin settings."
+				);
+				return;
+			}
 			const selection = editor.getSelection();
 			new IdeationModal(
 				services.app,
