@@ -306,6 +306,31 @@ export default class SecondThoughtsPlugin extends Plugin {
 		if (!Array.isArray(this.settings.excludedTags)) {
 			this.settings.excludedTags = DEFAULT_SETTINGS.excludedTags;
 		}
+		if (
+			typeof this.settings.footnoteThreshold !== "number" ||
+			this.settings.footnoteThreshold < 0 ||
+			this.settings.footnoteThreshold > 1
+		) {
+			this.settings.footnoteThreshold = DEFAULT_SETTINGS.footnoteThreshold;
+		}
+		const VALID_MODELS = ["gpt-4o-mini", "gpt-4o"];
+		if (!VALID_MODELS.includes(this.settings.ideationModel)) {
+			this.settings.ideationModel = DEFAULT_SETTINGS.ideationModel;
+		}
+		if (
+			typeof this.settings.ideasPerGeneration !== "number" ||
+			this.settings.ideasPerGeneration < 1 ||
+			this.settings.ideasPerGeneration > 10
+		) {
+			this.settings.ideasPerGeneration =
+				DEFAULT_SETTINGS.ideasPerGeneration;
+		}
+		if (typeof this.settings.enableFootnotes !== "boolean") {
+			this.settings.enableFootnotes = DEFAULT_SETTINGS.enableFootnotes;
+		}
+		if (typeof this.settings.enableIdeation !== "boolean") {
+			this.settings.enableIdeation = DEFAULT_SETTINGS.enableIdeation;
+		}
 	}
 
 	async saveSettings() {
