@@ -16,6 +16,7 @@ export class IdleDetector {
 	private ownWrites = new Set<string>();
 	private activeFilePath: string | null = null;
 	private handlers: IdleHandler[] = [];
+	private missingKeyNoticeShown = false;
 
 	constructor(
 		private plugin: Plugin,
@@ -103,9 +104,13 @@ export class IdleDetector {
 	private async onIdle(file: TFile): Promise<void> {
 		if (this.activeFilePath === file.path) return;
 		if (!this.settings.apiKey) {
-			new Notice(
-				"Second Thoughts: API key required. Set it in plugin settings."
-			);
+			if (!this.missingKeyNoticeShown) {
+				this.missingKeyNoticeShown = true;
+				new Notice(
+					"Second Thoughts: Set your OpenAI API key in plugin settings to enable connections.",
+					8000
+				);
+			}
 			return;
 		}
 		if (this.processing.has(file.path)) return;

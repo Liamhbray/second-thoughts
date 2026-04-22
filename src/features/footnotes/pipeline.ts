@@ -32,7 +32,17 @@ export async function runFootnotes(
 	);
 
 	if (candidates.size === 0) {
-		console.log(`Second Thoughts: no candidates for ${file.path}`);
+		const resolved = app.metadataCache.resolvedLinks[file.path];
+		const hasLinks = resolved && Object.keys(resolved).length > 0;
+		if (!hasLinks) {
+			new Notice(
+				`Second Thoughts: ${file.basename} has no links — add [[wiki-links]] to enable connections.`
+			);
+		} else {
+			console.log(
+				`Second Thoughts: no candidates for ${file.path}`
+			);
+		}
 		return;
 	}
 
