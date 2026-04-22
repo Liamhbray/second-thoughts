@@ -6,11 +6,10 @@ import {
 	cosineSimilarity,
 } from "../../core/similarity";
 import { saveEmbeddingCache } from "../../core/embedding";
-import { LLMError } from "../../core/llm";
+import { handleLLMError } from "../../core/handle-llm-error";
 import { nextFootnoteId, formatFootnote } from "./format";
 import { generateFootnoteReason, FootnoteProposal } from "./prompts";
 import { notify } from "../../core/notify";
-import { AUTH_PAUSE_MS } from "../../core/constants";
 
 const isolatedNoticeShown = new Set<string>();
 
@@ -99,16 +98,9 @@ export async function runFootnotes(
 				app
 			);
 		} catch (e) {
-			if (e instanceof LLMError && e.kind === "auth") {
-				services.pauseApi(AUTH_PAUSE_MS);
-				notify("API key rejected. Check plugin settings.");
+			if (!handleLLMError(e, services, `footnote generation failed for ${file.path} → ${target.path}`)) {
 				return;
 			}
-			services.recordApiFailure();
-			console.error(
-				`Second Thoughts: footnote generation failed for ${file.path} → ${target.path}`,
-				e
-			);
 			continue;
 		}
 

@@ -5,9 +5,9 @@ import {
 	loadAllEmbeddingCaches,
 	hashPath,
 } from "./embedding";
-import { LLMError } from "./llm";
+import { handleLLMError } from "./handle-llm-error";
 import { notify } from "./notify";
-import { AUTH_PAUSE_MS, BOOTSTRAP_BATCH_SIZE, BOOTSTRAP_PROGRESS_INTERVAL } from "./constants";
+import { BOOTSTRAP_BATCH_SIZE, BOOTSTRAP_PROGRESS_INTERVAL } from "./constants";
 
 export interface BootstrapDeps {
 	app: App;
@@ -93,26 +93,9 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 					notify(`Indexed ${embedded}/${total} notes...`);
 				}
 			} catch (e) {
-				if (e instanceof LLMError && e.kind === "auth") {
-					deps.pauseApi(AUTH_PAUSE_MS);
-					notify("API key rejected. Check plugin settings.");
+				if (!handleLLMError(e, deps, `bootstrap embed failed for ${file.path}`)) {
 					break outer;
 				}
-				if (e instanceof LLMError && e.kind === "rate_limit") {
-					deps.recordRateLimitHit();
-				} else {
-					deps.recordApiFailure();
-				}
-				if (
-					e instanceof LLMError &&
-					(e.kind === "rate_limit" || e.kind === "network")
-				) {
-					notify(`Embedding failed (${e.kind}) — ${file.path}`);
-				}
-				console.error(
-					`Second Thoughts: bootstrap embed failed for ${file.path}`,
-					e
-				);
 			}
 		}
 		if (i + BOOTSTRAP_BATCH_SIZE < staleQueue.length) {

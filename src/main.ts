@@ -11,7 +11,8 @@ import {
 	saveEmbeddingCache,
 	EmbeddingCache,
 } from "./core/embedding";
-import { OpenAIProvider, LLMProvider, LLMError } from "./core/llm";
+import { OpenAIProvider, LLMProvider } from "./core/llm";
+import { handleLLMError } from "./core/handle-llm-error";
 import { Services } from "./core/services";
 import { IdleDetector } from "./core/idle";
 import { runBootstrap } from "./core/bootstrap";
@@ -59,23 +60,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 				await this.embedNote(file);
 				this.recordApiSuccess();
 			} catch (e) {
-				if (e instanceof LLMError && e.kind === "auth") {
-					this.pauseApi(AUTH_PAUSE_MS);
-					notify("API key rejected. Check plugin settings.");
-					return;
-				}
-				if (e instanceof LLMError && e.kind === "rate_limit") {
-					this.recordRateLimitHit();
-				} else {
-					this.recordApiFailure();
-				}
-				if (e instanceof LLMError && (e.kind === "rate_limit" || e.kind === "network")) {
-					notify(e.message);
-				}
-				console.error(
-					`Second Thoughts: embed failed for ${file.path}`,
-					e
-				);
+				if (!handleLLMError(e, {
+					recordApiFailure: () => this.recordApiFailure(),
+					recordRateLimitHit: () => this.recordRateLimitHit(),
+					pauseApi: (ms) => this.pauseApi(ms),
+				}, `embed failed for ${file.path}`)) return;
 			}
 		});
 
