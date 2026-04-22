@@ -59,7 +59,14 @@ export default class SecondThoughtsPlugin extends Plugin {
 					);
 					return;
 				}
-				this.recordApiFailure();
+				if (e instanceof LLMError && e.kind === "rate_limit") {
+					this.recordRateLimitHit();
+				} else {
+					this.recordApiFailure();
+				}
+				if (e instanceof LLMError && (e.kind === "rate_limit" || e.kind === "network")) {
+					new Notice(`Second Thoughts: ${e.message}`);
+				}
 				console.error(
 					`Second Thoughts: embed failed for ${file.path}`,
 					e
@@ -79,6 +86,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 			isApiPaused: () => this.isApiPaused(),
 			recordApiSuccess: () => this.recordApiSuccess(),
 			recordApiFailure: () => this.recordApiFailure(),
+			recordRateLimitHit: () => this.recordRateLimitHit(),
 			pauseApi: (ms) => this.pauseApi(ms),
 			addOwnWrite: (path) => this.idle.addOwnWrite(path),
 			embedNote: (file) => this.embedNote(file),
@@ -222,6 +230,15 @@ export default class SecondThoughtsPlugin extends Plugin {
 					"Second Thoughts: API paused for 60s after 5 failures"
 				);
 			}
+		}
+	}
+
+	private recordRateLimitHit(): void {
+		this.consecutiveApiFailures++;
+		const wasPaused = this.isApiPaused();
+		this.apiPausedUntil = Date.now() + 30_000;
+		if (!wasPaused) {
+			new Notice("Second Thoughts: Rate limited by OpenAI. Pausing for 30s.");
 		}
 	}
 
