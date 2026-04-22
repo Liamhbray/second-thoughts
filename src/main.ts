@@ -93,7 +93,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 		};
 
 		// --- Activate features ---
-		activateFootnotes(this, services);
+		activateFootnotes(services);
 		activateIdeation(this, services);
 
 		// --- Legacy callout commands ---
@@ -291,13 +291,6 @@ export default class SecondThoughtsPlugin extends Plugin {
 	async loadSettings() {
 		const data = await this.loadData();
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-
-		if (this.settings.system1HopDepth && !data?.footnoteLinkDepth) {
-			this.settings.footnoteLinkDepth = this.settings.system1HopDepth;
-		}
-		if (this.settings.topKPerCompartment && !data?.topK) {
-			this.settings.topK = this.settings.topKPerCompartment;
-		}
 
 		if (
 			typeof this.settings.idleDebounceMinutes !== "number" ||

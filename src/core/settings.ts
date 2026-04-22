@@ -13,11 +13,6 @@ export interface SecondThoughtsSettings {
 	ideasPerGeneration: number;
 	enableFootnotes: boolean;
 	enableIdeation: boolean;
-	// Legacy fields kept for backwards compat with existing data.json
-	system1HopDepth?: number;
-	system2ScopeDefault?: "folder" | "vault";
-	agentTag?: string;
-	topKPerCompartment?: number;
 }
 
 export const DEFAULT_SETTINGS: SecondThoughtsSettings = {

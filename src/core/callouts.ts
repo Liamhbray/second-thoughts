@@ -1,7 +1,6 @@
 import { TFile, MarkdownView, Notice, App } from "obsidian";
 
 interface CalloutRange {
-	type: "connection" | "ideation";
 	from: number;
 	to: number;
 }
@@ -16,7 +15,6 @@ export function findCallouts(text: string): CalloutRange[] {
 		const match = line.match(/^>\s*\[!(connection|ideation)\]\s*$/);
 
 		if (match) {
-			const type = match[1] as "connection" | "ideation";
 			const from = pos;
 			let to = pos + line.length;
 
@@ -26,7 +24,7 @@ export function findCallouts(text: string): CalloutRange[] {
 				j++;
 			}
 
-			callouts.push({ type, from, to });
+			callouts.push({ from, to });
 		}
 
 		pos += line.length + 1;
