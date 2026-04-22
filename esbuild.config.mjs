@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
-import { copyFileSync, readFileSync, writeFileSync, existsSync } from "fs";
+import { copyFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import builtins from "builtin-modules";
 
 const prod = process.argv[2] === "production";
@@ -35,6 +35,7 @@ const context = await esbuild.context({
 });
 
 // Inject API key from .env into seed vault data.json
+mkdirSync(devVaultPlugin, { recursive: true });
 const dataJsonPath = `${devVaultPlugin}/data.json`;
 if (existsSync(".env")) {
 	const envLine = readFileSync(".env", "utf8").split("\n").find(l => l.startsWith("OPENAI_API_KEY="));
@@ -52,9 +53,8 @@ if (existsSync(".env")) {
 			excludedFolders: ["Scratch"],
 			excludedTags: [],
 		};
-		const data = existsSync(dataJsonPath)
-			? JSON.parse(readFileSync(dataJsonPath, "utf8"))
-			: {};
+		const raw = existsSync(dataJsonPath) ? readFileSync(dataJsonPath, "utf8").trim() : "";
+		const data = raw ? JSON.parse(raw) : {};
 		const merged = { ...defaults, ...data, apiKey: key };
 		writeFileSync(dataJsonPath, JSON.stringify(merged, null, 2) + "\n");
 	}
@@ -62,12 +62,10 @@ if (existsSync(".env")) {
 
 if (prod) {
 	await context.rebuild();
-	if (existsSync(devVaultPlugin)) {
-		copyFileSync("main.js", `${devVaultPlugin}/main.js`);
-		copyFileSync("manifest.json", `${devVaultPlugin}/manifest.json`);
-		if (existsSync("styles.css")) {
-			copyFileSync("styles.css", `${devVaultPlugin}/styles.css`);
-		}
+	copyFileSync("main.js", `${devVaultPlugin}/main.js`);
+	copyFileSync("manifest.json", `${devVaultPlugin}/manifest.json`);
+	if (existsSync("styles.css")) {
+		copyFileSync("styles.css", `${devVaultPlugin}/styles.css`);
 	}
 	process.exit(0);
 } else {
