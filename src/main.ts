@@ -284,53 +284,24 @@ export default class SecondThoughtsPlugin extends Plugin {
 		const data = await this.loadData();
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 
-		if (
-			typeof this.settings.idleDebounceMinutes !== "number" ||
-			this.settings.idleDebounceMinutes <= 0
-		) {
-			this.settings.idleDebounceMinutes =
-				DEFAULT_SETTINGS.idleDebounceMinutes;
-		}
-		if (
-			typeof this.settings.footnoteLinkDepth !== "number" ||
-			this.settings.footnoteLinkDepth < 1
-		) {
-			this.settings.footnoteLinkDepth = DEFAULT_SETTINGS.footnoteLinkDepth;
-		}
-		if (typeof this.settings.topK !== "number" || this.settings.topK < 1) {
-			this.settings.topK = DEFAULT_SETTINGS.topK;
-		}
-		if (!Array.isArray(this.settings.excludedFolders)) {
-			this.settings.excludedFolders = DEFAULT_SETTINGS.excludedFolders;
-		}
-		if (!Array.isArray(this.settings.excludedTags)) {
-			this.settings.excludedTags = DEFAULT_SETTINGS.excludedTags;
-		}
-		if (
-			typeof this.settings.footnoteThreshold !== "number" ||
-			this.settings.footnoteThreshold < 0 ||
-			this.settings.footnoteThreshold > 1
-		) {
-			this.settings.footnoteThreshold = DEFAULT_SETTINGS.footnoteThreshold;
-		}
-		const VALID_MODELS = ["gpt-4o-mini", "gpt-4o"];
-		if (!VALID_MODELS.includes(this.settings.ideationModel)) {
-			this.settings.ideationModel = DEFAULT_SETTINGS.ideationModel;
-		}
-		if (
-			typeof this.settings.ideasPerGeneration !== "number" ||
-			this.settings.ideasPerGeneration < 1 ||
-			this.settings.ideasPerGeneration > 10
-		) {
-			this.settings.ideasPerGeneration =
-				DEFAULT_SETTINGS.ideasPerGeneration;
-		}
-		if (typeof this.settings.enableFootnotes !== "boolean") {
-			this.settings.enableFootnotes = DEFAULT_SETTINGS.enableFootnotes;
-		}
-		if (typeof this.settings.enableIdeation !== "boolean") {
-			this.settings.enableIdeation = DEFAULT_SETTINGS.enableIdeation;
-		}
+		const s = this.settings;
+		const d = DEFAULT_SETTINGS;
+		const num = (key: "idleDebounceMinutes" | "footnoteLinkDepth" | "topK" | "footnoteThreshold" | "ideasPerGeneration", min: number, max = Infinity) => {
+			if (typeof s[key] !== "number" || s[key] < min || s[key] > max)
+				(s as any)[key] = d[key];
+		};
+
+		num("idleDebounceMinutes", 1);
+		num("footnoteLinkDepth", 1);
+		num("topK", 1);
+		num("footnoteThreshold", 0, 1);
+		num("ideasPerGeneration", 1, 10);
+
+		if (!Array.isArray(s.excludedFolders)) s.excludedFolders = d.excludedFolders;
+		if (!Array.isArray(s.excludedTags)) s.excludedTags = d.excludedTags;
+		if (!["gpt-4o-mini", "gpt-4o"].includes(s.ideationModel)) s.ideationModel = d.ideationModel;
+		if (typeof s.enableFootnotes !== "boolean") s.enableFootnotes = d.enableFootnotes;
+		if (typeof s.enableIdeation !== "boolean") s.enableIdeation = d.enableIdeation;
 	}
 
 	async saveSettings() {
