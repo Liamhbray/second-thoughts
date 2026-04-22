@@ -37,6 +37,29 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	private addNumberSetting(
+		containerEl: HTMLElement,
+		name: string,
+		desc: string,
+		key: "idleDebounceMinutes" | "footnoteLinkDepth" | "topK",
+		min: number
+	): void {
+		new Setting(containerEl)
+			.setName(name)
+			.setDesc(desc)
+			.addText((text) =>
+				text
+					.setValue(String(this.plugin.settings[key]))
+					.onChange(async (value) => {
+						const parsed = Number(value);
+						if (!isNaN(parsed) && parsed >= min) {
+							(this.plugin.settings as any)[key] = parsed;
+							await this.plugin.saveSettings();
+						}
+					})
+			);
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
@@ -94,53 +117,15 @@ export class SecondThoughtsSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("h3", { text: "Footnotes" });
 
-		new Setting(containerEl)
-			.setName("Processing delay (minutes)")
-			.setDesc("Time since last edit before a note is eligible for footnote generation.")
-			.addText((text) =>
-				text
-					.setPlaceholder("5")
-					.setValue(String(this.plugin.settings.idleDebounceMinutes))
-					.onChange(async (value) => {
-						const parsed = Number(value);
-						if (!isNaN(parsed) && parsed > 0) {
-							this.plugin.settings.idleDebounceMinutes = parsed;
-							await this.plugin.saveSettings();
-						}
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Footnote link depth")
-			.setDesc("How many link hops to search for related notes.")
-			.addText((text) =>
-				text
-					.setPlaceholder("3")
-					.setValue(String(this.plugin.settings.footnoteLinkDepth))
-					.onChange(async (value) => {
-						const parsed = Number(value);
-						if (!isNaN(parsed) && parsed >= 1) {
-							this.plugin.settings.footnoteLinkDepth = parsed;
-							await this.plugin.saveSettings();
-						}
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Retrieval depth")
-			.setDesc("Number of similar notes to consider per search.")
-			.addText((text) =>
-				text
-					.setPlaceholder("5")
-					.setValue(String(this.plugin.settings.topK))
-					.onChange(async (value) => {
-						const parsed = Number(value);
-						if (!isNaN(parsed) && parsed >= 1) {
-							this.plugin.settings.topK = parsed;
-							await this.plugin.saveSettings();
-						}
-					})
-			);
+		this.addNumberSetting(containerEl, "Processing delay (minutes)",
+			"Time since last edit before a note is eligible for footnote generation.",
+			"idleDebounceMinutes", 1);
+		this.addNumberSetting(containerEl, "Footnote link depth",
+			"How many link hops to search for related notes.",
+			"footnoteLinkDepth", 1);
+		this.addNumberSetting(containerEl, "Retrieval depth",
+			"Number of similar notes to consider per search.",
+			"topK", 1);
 
 		new Setting(containerEl)
 			.setName("Connection confidence")
