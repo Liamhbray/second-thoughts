@@ -1,4 +1,5 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { RETRY_MAX_ATTEMPTS, RETRY_BASE_MS, RETRY_JITTER_MS } from "./constants";
 
 export type LLMErrorKind =
 	| "auth"
@@ -74,6 +75,37 @@ export class OpenAIProvider implements LLMProvider {
 	}
 
 	private async post(
+		url: string,
+		body: unknown
+	): Promise<RequestUrlResponse> {
+		const RETRYABLE: Set<LLMErrorKind> = new Set(["network", "server"]);
+		let lastError: LLMError | undefined;
+
+		for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+			try {
+				return await this.postOnce(url, body);
+			} catch (e) {
+				if (e instanceof LLMError && RETRYABLE.has(e.kind) && attempt < RETRY_MAX_ATTEMPTS - 1) {
+					lastError = e;
+					const baseMs = RETRY_BASE_MS * Math.pow(2, attempt);
+					const jitter = Math.random() * RETRY_JITTER_MS;
+					await this.sleep(baseMs + jitter);
+					continue;
+				}
+				throw e;
+			}
+		}
+
+		// Unreachable in practice, but satisfies the compiler
+		throw lastError!;
+	}
+
+	/** Visible for testing — override in tests to avoid real delays. */
+	protected sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	private async postOnce(
 		url: string,
 		body: unknown
 	): Promise<RequestUrlResponse> {

@@ -62,7 +62,22 @@ export async function generateBridgingIdeas(
 	const ideas = text
 		.split(/\[\d+\]\s*/)
 		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
+		.filter((s) => s.length > 0)
+		.map((idea) => validateWikilinks(idea, app));
 
 	return ideas.length > 0 ? ideas : null;
+}
+
+/**
+ * Validate [[wikilinks]] in an idea string against the vault.
+ * Unresolvable links are stripped to plain text.
+ */
+export function validateWikilinks(idea: string, app: App): string {
+	return idea.replace(/\[\[([^\]]+)\]\]/g, (match, linkText: string) => {
+		const resolved = app.metadataCache.getFirstLinkpathDest(
+			linkText,
+			""
+		);
+		return resolved ? match : linkText;
+	});
 }

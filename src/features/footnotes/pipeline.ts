@@ -1,4 +1,4 @@
-import { Notice, TFile } from "obsidian";
+import { TFile } from "obsidian";
 import { Services } from "../../core/services";
 import {
 	filterCandidates,
@@ -6,9 +6,12 @@ import {
 	cosineSimilarity,
 } from "../../core/similarity";
 import { saveEmbeddingCache } from "../../core/embedding";
-import { LLMError } from "../../core/llm";
+import { handleLLMError } from "../../core/handle-llm-error";
 import { nextFootnoteId, formatFootnote } from "./format";
 import { generateFootnoteReason, FootnoteProposal } from "./prompts";
+import { notify } from "../../core/notify";
+
+const isolatedNoticeShown = new Set<string>();
 
 /**
  * Run the footnote pipeline for an idle note.
@@ -32,7 +35,18 @@ export async function runFootnotes(
 	);
 
 	if (candidates.size === 0) {
-		console.log(`Second Thoughts: no candidates for ${file.path}`);
+		const resolved = app.metadataCache.resolvedLinks[file.path];
+		const hasLinks = resolved && Object.keys(resolved).length > 0;
+		if (!hasLinks && !isolatedNoticeShown.has(file.path)) {
+			isolatedNoticeShown.add(file.path);
+			notify(
+				`${file.basename} has no links — add [[wiki-links]] to enable connections.`
+			);
+		} else if (hasLinks) {
+			console.log(
+				`Second Thoughts: no candidates for ${file.path}`
+			);
+		}
 		return;
 	}
 
@@ -47,7 +61,7 @@ export async function runFootnotes(
 
 	const threshold = settings.footnoteThreshold;
 	const targets = [...allPaths]
-		.filter((p) => !cached.proposed.includes(p))
+		.filter((p) => p !== file.path && !cached.proposed.includes(p))
 		.map((p) => {
 			const s = index.get(p);
 			if (!s?.content?.length) return { path: p, score: 0 };
@@ -68,6 +82,7 @@ export async function runFootnotes(
 
 	const noteContent = await app.vault.read(file);
 	const proposedPaths: string[] = [];
+	const proposedNames: string[] = [];
 
 	for (const target of targets) {
 		if (services.getActiveFilePath() === file.path) break;
@@ -83,18 +98,9 @@ export async function runFootnotes(
 				app
 			);
 		} catch (e) {
-			if (e instanceof LLMError && e.kind === "auth") {
-				services.pauseApi(10 * 60_000);
-				new Notice(
-					"Second Thoughts: API key rejected. Check plugin settings."
-				);
+			if (!handleLLMError(e, services, `footnote generation failed for ${file.path} → ${target.path}`)) {
 				return;
 			}
-			services.recordApiFailure();
-			console.error(
-				`Second Thoughts: footnote generation failed for ${file.path} → ${target.path}`,
-				e
-			);
 			continue;
 		}
 
@@ -104,102 +110,111 @@ export async function runFootnotes(
 		if (services.getActiveFilePath() === file.path) break;
 
 		services.addOwnWrite(file.path);
-		await app.vault.process(file, (data) => {
-			if (services.getActiveFilePath() === file.path) return data;
+		try {
+			await app.vault.process(file, (data) => {
+				if (services.getActiveFilePath() === file.path) return data;
 
-			// Guard: skip if target already in a footnote definition
-			const escaped = proposal.targetName.replace(
-				/[.*+?^${}()|[\]\\]/g,
-				"\\$&"
-			);
-			if (
-				data.match(
-					new RegExp(
-						`^\\[\\^st-\\d+\\]:.*\\[\\[${escaped}\\]\\]`,
-						"m"
+				// Guard: skip if target already in a footnote definition
+				const escaped = proposal.targetName.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					"\\$&"
+				);
+				if (
+					data.match(
+						new RegExp(
+							`^\\[\\^st-\\d+\\]:.*\\[\\[${escaped}\\]\\]`,
+							"m"
+						)
 					)
-				)
-			) {
-				return data;
-			}
-
-			const id = nextFootnoteId(data);
-			const { ref, def } = formatFootnote(
-				id,
-				proposal.targetName,
-				proposal.reason
-			);
-
-			const lines = data.split("\n");
-			const paragraphs: { endLine: number; text: string }[] = [];
-			let paraStart = -1;
-
-			for (let i = 0; i < lines.length; i++) {
-				const blank = lines[i].trim() === "";
-				const isHeading = lines[i].startsWith("#");
-				const isTag = lines[i].match(/^#\w/);
-				const isMeta =
-					lines[i].startsWith("[^") || lines[i].startsWith("---");
-
-				if (!blank && !isHeading && !isMeta && !isTag) {
-					if (paraStart === -1) paraStart = i;
-				} else if (paraStart !== -1) {
-					paragraphs.push({
-						endLine: i - 1,
-						text: lines.slice(paraStart, i).join("\n"),
-					});
-					paraStart = -1;
+				) {
+					return data;
 				}
-			}
-			if (paraStart !== -1) {
-				paragraphs.push({
-					endLine: lines.length - 1,
-					text: lines.slice(paraStart).join("\n"),
-				});
-			}
 
-			// Pick paragraph by keyword match to target title
-			let bestPara = paragraphs.length - 1;
-			if (paragraphs.length > 1) {
-				const titleWords = proposal.targetName
-					.toLowerCase()
-					.split(/\s+/);
-				let bestScore = -1;
-				for (let i = 0; i < paragraphs.length; i++) {
-					const pText = paragraphs[i].text.toLowerCase();
-					const score = titleWords.filter((w) =>
-						pText.includes(w)
-					).length;
-					if (score > bestScore) {
-						bestScore = score;
-						bestPara = i;
+				const id = nextFootnoteId(data);
+				const { ref, def } = formatFootnote(
+					id,
+					proposal.targetName,
+					proposal.reason
+				);
+
+				const lines = data.split("\n");
+				const paragraphs: { endLine: number; text: string }[] = [];
+				let paraStart = -1;
+
+				for (let i = 0; i < lines.length; i++) {
+					const blank = lines[i].trim() === "";
+					const isHeading = lines[i].startsWith("#");
+					const isTag = lines[i].match(/^#\w/);
+					const isMeta =
+						lines[i].startsWith("[^") ||
+						lines[i].startsWith("---");
+
+					if (!blank && !isHeading && !isMeta && !isTag) {
+						if (paraStart === -1) paraStart = i;
+					} else if (paraStart !== -1) {
+						paragraphs.push({
+							endLine: i - 1,
+							text: lines.slice(paraStart, i).join("\n"),
+						});
+						paraStart = -1;
 					}
 				}
-			}
+				if (paraStart !== -1) {
+					paragraphs.push({
+						endLine: lines.length - 1,
+						text: lines.slice(paraStart).join("\n"),
+					});
+				}
 
-			if (paragraphs.length === 0) {
-				const hasFootnotes = /^\[\^/.test(
-					data.split("\n").slice(-5).join("\n")
+				// Pick paragraph by keyword match to target title
+				let bestPara = paragraphs.length - 1;
+				if (paragraphs.length > 1) {
+					const titleWords = proposal.targetName
+						.toLowerCase()
+						.split(/\s+/);
+					let bestScore = -1;
+					for (let i = 0; i < paragraphs.length; i++) {
+						const pText = paragraphs[i].text.toLowerCase();
+						const score = titleWords.filter((w) =>
+							pText.includes(w)
+						).length;
+						if (score > bestScore) {
+							bestScore = score;
+							bestPara = i;
+						}
+					}
+				}
+
+				if (paragraphs.length === 0) {
+					const hasFootnotes = /^\[\^/.test(
+						data.split("\n").slice(-5).join("\n")
+					);
+					const separator = hasFootnotes ? "" : "\n\n---";
+					return (
+						data.trimEnd() + ref + separator + "\n\n" + def + "\n"
+					);
+				}
+
+				const insertLine = paragraphs[bestPara].endLine;
+				lines[insertLine] = lines[insertLine] + ref;
+
+				const joined = lines.join("\n").trimEnd();
+				const hasFootnotes = /^\[\^/m.test(
+					joined.split("\n").slice(-5).join("\n")
 				);
 				const separator = hasFootnotes ? "" : "\n\n---";
-				return data.trimEnd() + ref + separator + "\n\n" + def + "\n";
-			}
-
-			const insertLine = paragraphs[bestPara].endLine;
-			lines[insertLine] = lines[insertLine] + ref;
-
-			const joined = lines.join("\n").trimEnd();
-			const hasFootnotes = /^\[\^/m.test(
-				joined.split("\n").slice(-5).join("\n")
+				return joined + separator + "\n\n" + def + "\n";
+			});
+		} catch (e) {
+			console.error(
+				`Second Thoughts: vault.process failed for ${file.path}`,
+				e
 			);
-			const separator = hasFootnotes ? "" : "\n\n---";
-			return joined + separator + "\n\n" + def + "\n";
-		});
+			continue;
+		}
 
 		proposedPaths.push(target.path);
-		new Notice(
-			`Second Thoughts: ${file.basename} → [[${proposal.targetName}]]`
-		);
+		proposedNames.push(proposal.targetName);
 		console.log(
 			`Second Thoughts: proposed footnote for ${file.path} → ${target.path} (score: ${target.score.toFixed(3)})`
 		);
@@ -210,5 +225,13 @@ export async function runFootnotes(
 			...new Set([...cached.proposed, ...proposedPaths]),
 		];
 		await saveEmbeddingCache(app, file.path, cached);
+
+		if (proposedNames.length === 1) {
+			notify(`${file.basename} → [[${proposedNames[0]}]]`);
+		} else {
+			notify(
+				`Added ${proposedNames.length} connections to ${file.basename}`
+			);
+		}
 	}
 }

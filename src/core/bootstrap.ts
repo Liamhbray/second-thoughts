@@ -1,11 +1,13 @@
-import { App, Notice, TFile } from "obsidian";
+import { App, TFile } from "obsidian";
 import {
 	EmbeddingIndex,
 	EmbeddingCache,
 	loadAllEmbeddingCaches,
 	hashPath,
 } from "./embedding";
-import { LLMError } from "./llm";
+import { handleLLMError } from "./handle-llm-error";
+import { notify } from "./notify";
+import { BOOTSTRAP_BATCH_SIZE, BOOTSTRAP_PROGRESS_INTERVAL } from "./constants";
 
 export interface BootstrapDeps {
 	app: App;
@@ -15,10 +17,9 @@ export interface BootstrapDeps {
 	embedNote: (file: TFile) => Promise<void>;
 	recordApiSuccess: () => void;
 	recordApiFailure: () => void;
+	recordRateLimitHit: () => void;
 	pauseApi: (ms: number) => void;
 }
-
-const AUTH_FAILURE_PAUSE_MS = 10 * 60_000;
 
 /**
  * Load embedding caches, detect stale notes, and re-embed them.
@@ -67,38 +68,46 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 	);
 
 	if (staleQueue.length > 0 && !deps.apiKey) {
-		new Notice(
-			`Second Thoughts: ${staleQueue.length} notes need indexing. Set your OpenAI API key in plugin settings.`
+		notify(
+			`${staleQueue.length} notes need indexing. Set your OpenAI API key in plugin settings.`
 		);
 		return;
 	}
 
-	const BATCH_SIZE = 50;
-	outer: for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
-		const batch = staleQueue.slice(i, i + BATCH_SIZE);
+	if (staleQueue.length > 0) {
+		notify(`Indexing ${staleQueue.length} notes...`);
+	}
+
+	let embedded = 0;
+	const total = staleQueue.length;
+
+	outer: for (let i = 0; i < staleQueue.length; i += BOOTSTRAP_BATCH_SIZE) {
+		const batch = staleQueue.slice(i, i + BOOTSTRAP_BATCH_SIZE);
 		for (const file of batch) {
 			if (!deps.apiKey || deps.isApiPaused()) break outer;
 			try {
 				await deps.embedNote(file);
 				deps.recordApiSuccess();
+				embedded++;
+				if (embedded % BOOTSTRAP_PROGRESS_INTERVAL === 0) {
+					notify(`Indexed ${embedded}/${total} notes...`);
+				}
 			} catch (e) {
-				if (e instanceof LLMError && e.kind === "auth") {
-					deps.pauseApi(AUTH_FAILURE_PAUSE_MS);
-					new Notice(
-						"Second Thoughts: API key rejected. Check plugin settings."
-					);
+				if (!handleLLMError(e, deps, `bootstrap embed failed for ${file.path}`)) {
 					break outer;
 				}
-				deps.recordApiFailure();
-				console.error(
-					`Second Thoughts: bootstrap embed failed for ${file.path}`,
-					e
-				);
 			}
 		}
-		if (i + BATCH_SIZE < staleQueue.length) {
+		if (i + BOOTSTRAP_BATCH_SIZE < staleQueue.length) {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
+	}
+
+	if (total > 0) {
+		const msg = embedded === total
+			? `Indexing complete (${embedded} notes)`
+			: `Indexed ${embedded}/${total} notes (some failed)`;
+		notify(msg);
 	}
 
 	console.log(

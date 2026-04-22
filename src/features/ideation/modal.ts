@@ -4,6 +4,12 @@ import { LLMError, LLMProvider } from "../../core/llm";
 import { selectDiverseResults } from "../../core/similarity";
 import { SecondThoughtsSettings } from "../../core/settings";
 import { generateBridgingIdeas } from "./prompts";
+import {
+	IDEATION_EMBED_MAX_CHARS,
+	IDEATION_PROMPT_MAX_CHARS,
+	IDEATION_DIVERSE_K,
+	IDEATION_LAMBDA,
+} from "../../core/constants";
 
 export class IdeationModal extends Modal {
 	private editor: Editor;
@@ -13,6 +19,7 @@ export class IdeationModal extends Modal {
 	private index: EmbeddingIndex;
 	private llm: LLMProvider;
 	private filePath: string;
+	private isApiPaused: () => boolean;
 
 	constructor(
 		app: App,
@@ -21,7 +28,8 @@ export class IdeationModal extends Modal {
 		settings: SecondThoughtsSettings,
 		index: EmbeddingIndex,
 		llm: LLMProvider,
-		filePath: string
+		filePath: string,
+		isApiPaused: () => boolean
 	) {
 		super(app);
 		this.editor = editor;
@@ -35,6 +43,7 @@ export class IdeationModal extends Modal {
 		this.index = index;
 		this.llm = llm;
 		this.filePath = filePath;
+		this.isApiPaused = isApiPaused;
 	}
 
 	onOpen() {
@@ -97,6 +106,13 @@ export class IdeationModal extends Modal {
 	}
 
 	private async generate(selectionText: string, instruction: string) {
+		if (this.isApiPaused()) {
+			this.showError(
+				"API calls are paused due to recent errors. Try again in a moment."
+			);
+			return;
+		}
+
 		const { contentEl } = this;
 		contentEl.empty();
 
@@ -113,7 +129,7 @@ export class IdeationModal extends Modal {
 				(noteFile ? await this.app.vault.read(noteFile) : "");
 
 			const queryVec = await this.llm.embed(
-				textToEmbed.substring(0, 8000)
+				textToEmbed.substring(0, IDEATION_EMBED_MAX_CHARS)
 			);
 
 			const candidateMap = new Map<string, number[]>();
@@ -134,8 +150,8 @@ export class IdeationModal extends Modal {
 			const diversePaths = selectDiverseResults(
 				queryVec,
 				candidateMap,
-				5,
-				0.5
+				IDEATION_DIVERSE_K,
+				IDEATION_LAMBDA
 			);
 
 			if (diversePaths.length === 0) {
@@ -149,7 +165,7 @@ export class IdeationModal extends Modal {
 				" diverse notes...";
 
 			const ideas = await generateBridgingIdeas(
-				selectionText || textToEmbed.substring(0, 2000),
+				selectionText || textToEmbed.substring(0, IDEATION_PROMPT_MAX_CHARS),
 				instruction,
 				diversePaths,
 				this.llm,

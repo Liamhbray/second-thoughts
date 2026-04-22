@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile } from "obsidian";
+import { Plugin, TFile } from "obsidian";
 import {
 	SecondThoughtsSettings,
 	DEFAULT_SETTINGS,
@@ -11,7 +11,8 @@ import {
 	saveEmbeddingCache,
 	EmbeddingCache,
 } from "./core/embedding";
-import { OpenAIProvider, LLMProvider, LLMError } from "./core/llm";
+import { OpenAIProvider, LLMProvider } from "./core/llm";
+import { handleLLMError } from "./core/handle-llm-error";
 import { Services } from "./core/services";
 import { IdleDetector } from "./core/idle";
 import { runBootstrap } from "./core/bootstrap";
@@ -24,6 +25,13 @@ import {
 } from "./core/callouts";
 import { activateFootnotes } from "./features/footnotes/activate";
 import { activateIdeation } from "./features/ideation/activate";
+import { notify } from "./core/notify";
+import {
+	AUTH_PAUSE_MS,
+	FAILURE_PAUSE_MS,
+	FAILURE_THRESHOLD,
+	RATE_LIMIT_PAUSE_MS,
+} from "./core/constants";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings!: SecondThoughtsSettings;
@@ -52,18 +60,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 				await this.embedNote(file);
 				this.recordApiSuccess();
 			} catch (e) {
-				if (e instanceof LLMError && e.kind === "auth") {
-					this.pauseApi(10 * 60_000);
-					new Notice(
-						"Second Thoughts: API key rejected. Check plugin settings."
-					);
-					return;
-				}
-				this.recordApiFailure();
-				console.error(
-					`Second Thoughts: embed failed for ${file.path}`,
-					e
-				);
+				if (!handleLLMError(e, {
+					recordApiFailure: () => this.recordApiFailure(),
+					recordRateLimitHit: () => this.recordRateLimitHit(),
+					pauseApi: (ms) => this.pauseApi(ms),
+				}, `embed failed for ${file.path}`)) return;
 			}
 		});
 
@@ -79,13 +80,14 @@ export default class SecondThoughtsPlugin extends Plugin {
 			isApiPaused: () => this.isApiPaused(),
 			recordApiSuccess: () => this.recordApiSuccess(),
 			recordApiFailure: () => this.recordApiFailure(),
+			recordRateLimitHit: () => this.recordRateLimitHit(),
 			pauseApi: (ms) => this.pauseApi(ms),
 			addOwnWrite: (path) => this.idle.addOwnWrite(path),
 			embedNote: (file) => this.embedNote(file),
 		};
 
 		// --- Activate features ---
-		activateFootnotes(this, services);
+		activateFootnotes(services);
 		activateIdeation(this, services);
 
 		// --- Legacy callout commands ---
@@ -188,6 +190,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 				embedNote: (file) => this.embedNote(file),
 				recordApiSuccess: () => this.recordApiSuccess(),
 				recordApiFailure: () => this.recordApiFailure(),
+				recordRateLimitHit: () => this.recordRateLimitHit(),
 				pauseApi: (ms) => this.pauseApi(ms),
 			});
 			this.lastBootstrapKey = key;
@@ -211,17 +214,24 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 	private recordApiFailure(): void {
 		this.consecutiveApiFailures++;
-		if (this.consecutiveApiFailures >= 5) {
+		if (this.consecutiveApiFailures >= FAILURE_THRESHOLD) {
 			const wasPaused = this.isApiPaused();
-			this.apiPausedUntil = Date.now() + 60_000;
+			this.apiPausedUntil = Date.now() + FAILURE_PAUSE_MS;
 			if (!wasPaused) {
-				new Notice(
-					"Second Thoughts: pausing API calls for 60s after repeated failures."
-				);
+				notify("pausing API calls for 60s after repeated failures.");
 				console.warn(
 					"Second Thoughts: API paused for 60s after 5 failures"
 				);
 			}
+		}
+	}
+
+	private recordRateLimitHit(): void {
+		this.consecutiveApiFailures++;
+		const wasPaused = this.isApiPaused();
+		this.apiPausedUntil = Date.now() + RATE_LIMIT_PAUSE_MS;
+		if (!wasPaused) {
+			notify("Rate limited by OpenAI. Pausing for 30s.");
 		}
 	}
 
@@ -274,35 +284,24 @@ export default class SecondThoughtsPlugin extends Plugin {
 		const data = await this.loadData();
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 
-		if (this.settings.system1HopDepth && !data?.footnoteLinkDepth) {
-			this.settings.footnoteLinkDepth = this.settings.system1HopDepth;
-		}
-		if (this.settings.topKPerCompartment && !data?.topK) {
-			this.settings.topK = this.settings.topKPerCompartment;
-		}
+		const s = this.settings;
+		const d = DEFAULT_SETTINGS;
+		const num = (key: "idleDebounceMinutes" | "footnoteLinkDepth" | "topK" | "footnoteThreshold" | "ideasPerGeneration", min: number, max = Infinity) => {
+			if (typeof s[key] !== "number" || s[key] < min || s[key] > max)
+				(s as any)[key] = d[key];
+		};
 
-		if (
-			typeof this.settings.idleDebounceMinutes !== "number" ||
-			this.settings.idleDebounceMinutes <= 0
-		) {
-			this.settings.idleDebounceMinutes =
-				DEFAULT_SETTINGS.idleDebounceMinutes;
-		}
-		if (
-			typeof this.settings.footnoteLinkDepth !== "number" ||
-			this.settings.footnoteLinkDepth < 1
-		) {
-			this.settings.footnoteLinkDepth = DEFAULT_SETTINGS.footnoteLinkDepth;
-		}
-		if (typeof this.settings.topK !== "number" || this.settings.topK < 1) {
-			this.settings.topK = DEFAULT_SETTINGS.topK;
-		}
-		if (!Array.isArray(this.settings.excludedFolders)) {
-			this.settings.excludedFolders = DEFAULT_SETTINGS.excludedFolders;
-		}
-		if (!Array.isArray(this.settings.excludedTags)) {
-			this.settings.excludedTags = DEFAULT_SETTINGS.excludedTags;
-		}
+		num("idleDebounceMinutes", 1);
+		num("footnoteLinkDepth", 1);
+		num("topK", 1);
+		num("footnoteThreshold", 0, 1);
+		num("ideasPerGeneration", 1, 10);
+
+		if (!Array.isArray(s.excludedFolders)) s.excludedFolders = d.excludedFolders;
+		if (!Array.isArray(s.excludedTags)) s.excludedTags = d.excludedTags;
+		if (!["gpt-4o-mini", "gpt-4o"].includes(s.ideationModel)) s.ideationModel = d.ideationModel;
+		if (typeof s.enableFootnotes !== "boolean") s.enableFootnotes = d.enableFootnotes;
+		if (typeof s.enableIdeation !== "boolean") s.enableIdeation = d.enableIdeation;
 	}
 
 	async saveSettings() {

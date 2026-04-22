@@ -1,5 +1,7 @@
-import { Notice, Plugin, TAbstractFile, TFile, MarkdownView } from "obsidian";
+import { Plugin, TAbstractFile, TFile, MarkdownView } from "obsidian";
 import { SecondThoughtsSettings } from "./settings";
+import { notify } from "./notify";
+import { MISSING_KEY_NOTICE_DURATION } from "./constants";
 
 export interface IdleHandler {
 	(file: TFile): Promise<void>;
@@ -16,6 +18,7 @@ export class IdleDetector {
 	private ownWrites = new Set<string>();
 	private activeFilePath: string | null = null;
 	private handlers: IdleHandler[] = [];
+	private missingKeyNoticeShown = false;
 
 	constructor(
 		private plugin: Plugin,
@@ -103,9 +106,13 @@ export class IdleDetector {
 	private async onIdle(file: TFile): Promise<void> {
 		if (this.activeFilePath === file.path) return;
 		if (!this.settings.apiKey) {
-			new Notice(
-				"Second Thoughts: API key required. Set it in plugin settings."
-			);
+			if (!this.missingKeyNoticeShown) {
+				this.missingKeyNoticeShown = true;
+				notify(
+					"Set your OpenAI API key in plugin settings to enable connections.",
+					MISSING_KEY_NOTICE_DURATION
+				);
+			}
 			return;
 		}
 		if (this.processing.has(file.path)) return;
