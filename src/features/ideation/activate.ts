@@ -30,7 +30,8 @@ export function activateIdeation(
 				services.settings,
 				services.index,
 				services.llm,
-				view.file.path
+				view.file.path,
+				services.isApiPaused
 			).open();
 		},
 	});

@@ -13,6 +13,7 @@ export class IdeationModal extends Modal {
 	private index: EmbeddingIndex;
 	private llm: LLMProvider;
 	private filePath: string;
+	private isApiPaused: () => boolean;
 
 	constructor(
 		app: App,
@@ -21,7 +22,8 @@ export class IdeationModal extends Modal {
 		settings: SecondThoughtsSettings,
 		index: EmbeddingIndex,
 		llm: LLMProvider,
-		filePath: string
+		filePath: string,
+		isApiPaused: () => boolean
 	) {
 		super(app);
 		this.editor = editor;
@@ -35,6 +37,7 @@ export class IdeationModal extends Modal {
 		this.index = index;
 		this.llm = llm;
 		this.filePath = filePath;
+		this.isApiPaused = isApiPaused;
 	}
 
 	onOpen() {
@@ -97,6 +100,13 @@ export class IdeationModal extends Modal {
 	}
 
 	private async generate(selectionText: string, instruction: string) {
+		if (this.isApiPaused()) {
+			this.showError(
+				"API calls are paused due to recent errors. Try again in a moment."
+			);
+			return;
+		}
+
 		const { contentEl } = this;
 		contentEl.empty();
 
