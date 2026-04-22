@@ -105,6 +105,9 @@ export async function saveEmbeddingCache(
 ): Promise<void> {
 	const hash = hashPath(notePath);
 	const cachePath = `${EMBEDDINGS_DIR}/${hash}.json`;
+	if (!(await app.vault.adapter.exists(EMBEDDINGS_DIR))) {
+		await app.vault.adapter.mkdir(EMBEDDINGS_DIR);
+	}
 	await app.vault.adapter.write(cachePath, JSON.stringify(cached));
 }
 

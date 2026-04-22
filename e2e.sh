@@ -210,7 +210,14 @@ strip_footnotes "$SYSTEM2_NOTE"
 echo "  Stripped leftover callouts and footnotes from test notes"
 
 # Reload plugin for clean state
-obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>/dev/null
+reload_output=$(obsidian vault="$VAULT" plugin:reload id="$PLUGIN" 2>&1 || true)
+if echo "$reload_output" | grep -q "Vault not found"; then
+  echo "  ERROR: Obsidian CLI reports 'Vault not found' for '$VAULT'."
+  echo "  The Obsidian app has never opened this vault, so the CLI can't resolve it by name."
+  echo "  Fix: open the vault once in Obsidian (File > Open Vault, or 'open \"obsidian://open?vault=$VAULT\"'),"
+  echo "  then re-run 'npm run e2e'."
+  exit 1
+fi
 sleep 3
 echo "  Plugin reloaded"
 
