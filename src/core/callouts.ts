@@ -52,55 +52,40 @@ export function findCalloutAtLine(
 	return null;
 }
 
-export async function handleAccept(
+async function processActiveCallout(
 	app: App,
-	from: number,
-	to: number
+	transform: (data: string) => string,
+	action: string
 ): Promise<void> {
-	const view = app.workspace.getActiveViewOfType(MarkdownView);
-	const file = view?.file;
+	const file = app.workspace.getActiveViewOfType(MarkdownView)?.file;
 	if (!file) return;
 	try {
-		await app.vault.process(file, (data) => {
-			const block = data.slice(from, to);
-			const lines = block.split("\n");
-			const contentLines: string[] = [];
-			for (let i = 0; i < lines.length; i++) {
-				if (i === 0) continue;
-				contentLines.push(lines[i].replace(/^>\s?/, ""));
-			}
-			const plainContent = contentLines.join("\n").trim();
-			return data.slice(0, from) + plainContent + data.slice(to);
-		});
+		await app.vault.process(file, (data) => transform(data));
 	} catch (e) {
-		console.error("Second Thoughts: accept failed", e);
-		notify("could not accept proposal.");
+		console.error(`Second Thoughts: ${action} failed`, e);
+		notify(`could not ${action} proposal.`);
 	}
 }
 
-export async function handleReject(
-	app: App,
-	from: number,
-	to: number
-): Promise<void> {
-	const view = app.workspace.getActiveViewOfType(MarkdownView);
-	const file = view?.file;
-	if (!file) return;
-	try {
-		await app.vault.process(file, (data) => {
-			let start = from;
-			let end = to;
-			while (end < data.length && data[end] === "\n") end++;
-			if (start > 0 && data[start - 1] === "\n") {
-				start--;
-				if (start > 0 && data[start - 1] === "\n") start--;
-			}
-			return data.slice(0, start) + data.slice(end);
-		});
-	} catch (e) {
-		console.error("Second Thoughts: reject failed", e);
-		notify("could not reject proposal.");
-	}
+export function handleAccept(app: App, from: number, to: number): Promise<void> {
+	return processActiveCallout(app, (data) => {
+		const [, ...lines] = data.slice(from, to).split("\n");
+		const content = lines.map((l) => l.replace(/^>\s?/, "")).join("\n").trim();
+		return data.slice(0, from) + content + data.slice(to);
+	}, "accept");
+}
+
+export function handleReject(app: App, from: number, to: number): Promise<void> {
+	return processActiveCallout(app, (data) => {
+		let start = from;
+		let end = to;
+		while (end < data.length && data[end] === "\n") end++;
+		if (start > 0 && data[start - 1] === "\n") {
+			start--;
+			if (start > 0 && data[start - 1] === "\n") start--;
+		}
+		return data.slice(0, start) + data.slice(end);
+	}, "reject");
 }
 
 export async function handleRejectAll(
