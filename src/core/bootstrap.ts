@@ -73,6 +73,15 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 		return;
 	}
 
+	if (staleQueue.length > 0) {
+		new Notice(
+			`Second Thoughts: Indexing ${staleQueue.length} notes...`
+		);
+	}
+
+	let embedded = 0;
+	const total = staleQueue.length;
+
 	const BATCH_SIZE = 50;
 	outer: for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
 		const batch = staleQueue.slice(i, i + BATCH_SIZE);
@@ -81,6 +90,12 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 			try {
 				await deps.embedNote(file);
 				deps.recordApiSuccess();
+				embedded++;
+				if (embedded % 10 === 0) {
+					new Notice(
+						`Second Thoughts: Indexed ${embedded}/${total} notes...`
+					);
+				}
 			} catch (e) {
 				if (e instanceof LLMError && e.kind === "auth") {
 					deps.pauseApi(AUTH_FAILURE_PAUSE_MS);
@@ -90,6 +105,14 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 					break outer;
 				}
 				deps.recordApiFailure();
+				if (
+					e instanceof LLMError &&
+					(e.kind === "rate_limit" || e.kind === "network")
+				) {
+					new Notice(
+						`Second Thoughts: Embedding failed (${e.kind}) — ${file.path}`
+					);
+				}
 				console.error(
 					`Second Thoughts: bootstrap embed failed for ${file.path}`,
 					e
@@ -99,6 +122,10 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 		if (i + BATCH_SIZE < staleQueue.length) {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
+	}
+
+	if (total > 0) {
+		new Notice(`Second Thoughts: Indexing complete (${total} notes)`);
 	}
 
 	console.log(
