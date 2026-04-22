@@ -62,7 +62,7 @@ export function extractCompartments(
 		title,
 		tags: tagSet.join(", "),
 		links: linkSet.join(", "),
-		content,
+		content: content.substring(0, 30000),
 	};
 }
 

@@ -53,6 +53,11 @@ export async function generateFootnoteReason(
 	return {
 		targetPath,
 		targetName,
-		reason: reason.replace(/\n/g, " ").trim(),
+		reason: reason
+			.replace(/\n/g, " ")
+			.replace(/[*_`]/g, "")
+			.replace(/\s{2,}/g, " ")
+			.trim()
+			.substring(0, 200),
 	};
 }
