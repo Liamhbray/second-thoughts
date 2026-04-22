@@ -1,6 +1,7 @@
-import { Notice, Plugin } from "obsidian";
+import { Plugin } from "obsidian";
 import { Services } from "../../core/services";
 import { IdeationModal } from "./modal";
+import { notify } from "../../core/notify";
 
 /**
  * Activate the ideation feature.
@@ -17,9 +18,7 @@ export function activateIdeation(
 			if (!view.file) return;
 			if (!services.settings.enableIdeation) return;
 			if (!services.settings.apiKey) {
-				new Notice(
-					"Second Thoughts: API key required. Set it in plugin settings."
-				);
+				notify("API key required. Set it in plugin settings.");
 				return;
 			}
 			const selection = editor.getSelection();

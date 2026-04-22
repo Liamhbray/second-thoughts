@@ -1,4 +1,4 @@
-import { App, Notice, TFile } from "obsidian";
+import { App, TFile } from "obsidian";
 import {
 	EmbeddingIndex,
 	EmbeddingCache,
@@ -6,6 +6,8 @@ import {
 	hashPath,
 } from "./embedding";
 import { LLMError } from "./llm";
+import { notify } from "./notify";
+import { AUTH_PAUSE_MS, BOOTSTRAP_BATCH_SIZE, BOOTSTRAP_PROGRESS_INTERVAL } from "./constants";
 
 export interface BootstrapDeps {
 	app: App;
@@ -18,8 +20,6 @@ export interface BootstrapDeps {
 	recordRateLimitHit: () => void;
 	pauseApi: (ms: number) => void;
 }
-
-const AUTH_FAILURE_PAUSE_MS = 10 * 60_000;
 
 /**
  * Load embedding caches, detect stale notes, and re-embed them.
@@ -68,41 +68,34 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 	);
 
 	if (staleQueue.length > 0 && !deps.apiKey) {
-		new Notice(
-			`Second Thoughts: ${staleQueue.length} notes need indexing. Set your OpenAI API key in plugin settings.`
+		notify(
+			`${staleQueue.length} notes need indexing. Set your OpenAI API key in plugin settings.`
 		);
 		return;
 	}
 
 	if (staleQueue.length > 0) {
-		new Notice(
-			`Second Thoughts: Indexing ${staleQueue.length} notes...`
-		);
+		notify(`Indexing ${staleQueue.length} notes...`);
 	}
 
 	let embedded = 0;
 	const total = staleQueue.length;
 
-	const BATCH_SIZE = 50;
-	outer: for (let i = 0; i < staleQueue.length; i += BATCH_SIZE) {
-		const batch = staleQueue.slice(i, i + BATCH_SIZE);
+	outer: for (let i = 0; i < staleQueue.length; i += BOOTSTRAP_BATCH_SIZE) {
+		const batch = staleQueue.slice(i, i + BOOTSTRAP_BATCH_SIZE);
 		for (const file of batch) {
 			if (!deps.apiKey || deps.isApiPaused()) break outer;
 			try {
 				await deps.embedNote(file);
 				deps.recordApiSuccess();
 				embedded++;
-				if (embedded % 10 === 0) {
-					new Notice(
-						`Second Thoughts: Indexed ${embedded}/${total} notes...`
-					);
+				if (embedded % BOOTSTRAP_PROGRESS_INTERVAL === 0) {
+					notify(`Indexed ${embedded}/${total} notes...`);
 				}
 			} catch (e) {
 				if (e instanceof LLMError && e.kind === "auth") {
-					deps.pauseApi(AUTH_FAILURE_PAUSE_MS);
-					new Notice(
-						"Second Thoughts: API key rejected. Check plugin settings."
-					);
+					deps.pauseApi(AUTH_PAUSE_MS);
+					notify("API key rejected. Check plugin settings.");
 					break outer;
 				}
 				if (e instanceof LLMError && e.kind === "rate_limit") {
@@ -114,9 +107,7 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 					e instanceof LLMError &&
 					(e.kind === "rate_limit" || e.kind === "network")
 				) {
-					new Notice(
-						`Second Thoughts: Embedding failed (${e.kind}) — ${file.path}`
-					);
+					notify(`Embedding failed (${e.kind}) — ${file.path}`);
 				}
 				console.error(
 					`Second Thoughts: bootstrap embed failed for ${file.path}`,
@@ -124,16 +115,16 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 				);
 			}
 		}
-		if (i + BATCH_SIZE < staleQueue.length) {
+		if (i + BOOTSTRAP_BATCH_SIZE < staleQueue.length) {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
 	}
 
 	if (total > 0) {
 		const msg = embedded === total
-			? `Second Thoughts: Indexing complete (${embedded} notes)`
-			: `Second Thoughts: Indexed ${embedded}/${total} notes (some failed)`;
-		new Notice(msg);
+			? `Indexing complete (${embedded} notes)`
+			: `Indexed ${embedded}/${total} notes (some failed)`;
+		notify(msg);
 	}
 
 	console.log(

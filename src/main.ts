@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile } from "obsidian";
+import { Plugin, TFile } from "obsidian";
 import {
 	SecondThoughtsSettings,
 	DEFAULT_SETTINGS,
@@ -24,6 +24,13 @@ import {
 } from "./core/callouts";
 import { activateFootnotes } from "./features/footnotes/activate";
 import { activateIdeation } from "./features/ideation/activate";
+import { notify } from "./core/notify";
+import {
+	AUTH_PAUSE_MS,
+	FAILURE_PAUSE_MS,
+	FAILURE_THRESHOLD,
+	RATE_LIMIT_PAUSE_MS,
+} from "./core/constants";
 
 export default class SecondThoughtsPlugin extends Plugin {
 	settings!: SecondThoughtsSettings;
@@ -53,10 +60,8 @@ export default class SecondThoughtsPlugin extends Plugin {
 				this.recordApiSuccess();
 			} catch (e) {
 				if (e instanceof LLMError && e.kind === "auth") {
-					this.pauseApi(10 * 60_000);
-					new Notice(
-						"Second Thoughts: API key rejected. Check plugin settings."
-					);
+					this.pauseApi(AUTH_PAUSE_MS);
+					notify("API key rejected. Check plugin settings.");
 					return;
 				}
 				if (e instanceof LLMError && e.kind === "rate_limit") {
@@ -65,7 +70,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 					this.recordApiFailure();
 				}
 				if (e instanceof LLMError && (e.kind === "rate_limit" || e.kind === "network")) {
-					new Notice(`Second Thoughts: ${e.message}`);
+					notify(e.message);
 				}
 				console.error(
 					`Second Thoughts: embed failed for ${file.path}`,
@@ -220,13 +225,11 @@ export default class SecondThoughtsPlugin extends Plugin {
 
 	private recordApiFailure(): void {
 		this.consecutiveApiFailures++;
-		if (this.consecutiveApiFailures >= 5) {
+		if (this.consecutiveApiFailures >= FAILURE_THRESHOLD) {
 			const wasPaused = this.isApiPaused();
-			this.apiPausedUntil = Date.now() + 60_000;
+			this.apiPausedUntil = Date.now() + FAILURE_PAUSE_MS;
 			if (!wasPaused) {
-				new Notice(
-					"Second Thoughts: pausing API calls for 60s after repeated failures."
-				);
+				notify("pausing API calls for 60s after repeated failures.");
 				console.warn(
 					"Second Thoughts: API paused for 60s after 5 failures"
 				);
@@ -237,9 +240,9 @@ export default class SecondThoughtsPlugin extends Plugin {
 	private recordRateLimitHit(): void {
 		this.consecutiveApiFailures++;
 		const wasPaused = this.isApiPaused();
-		this.apiPausedUntil = Date.now() + 30_000;
+		this.apiPausedUntil = Date.now() + RATE_LIMIT_PAUSE_MS;
 		if (!wasPaused) {
-			new Notice("Second Thoughts: Rate limited by OpenAI. Pausing for 30s.");
+			notify("Rate limited by OpenAI. Pausing for 30s.");
 		}
 	}
 

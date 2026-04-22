@@ -1,4 +1,4 @@
-import { Notice, TFile } from "obsidian";
+import { TFile } from "obsidian";
 import { Services } from "../../core/services";
 import {
 	filterCandidates,
@@ -9,6 +9,8 @@ import { saveEmbeddingCache } from "../../core/embedding";
 import { LLMError } from "../../core/llm";
 import { nextFootnoteId, formatFootnote } from "./format";
 import { generateFootnoteReason, FootnoteProposal } from "./prompts";
+import { notify } from "../../core/notify";
+import { AUTH_PAUSE_MS } from "../../core/constants";
 
 const isolatedNoticeShown = new Set<string>();
 
@@ -38,8 +40,8 @@ export async function runFootnotes(
 		const hasLinks = resolved && Object.keys(resolved).length > 0;
 		if (!hasLinks && !isolatedNoticeShown.has(file.path)) {
 			isolatedNoticeShown.add(file.path);
-			new Notice(
-				`Second Thoughts: ${file.basename} has no links — add [[wiki-links]] to enable connections.`
+			notify(
+				`${file.basename} has no links — add [[wiki-links]] to enable connections.`
 			);
 		} else if (hasLinks) {
 			console.log(
@@ -98,10 +100,8 @@ export async function runFootnotes(
 			);
 		} catch (e) {
 			if (e instanceof LLMError && e.kind === "auth") {
-				services.pauseApi(10 * 60_000);
-				new Notice(
-					"Second Thoughts: API key rejected. Check plugin settings."
-				);
+				services.pauseApi(AUTH_PAUSE_MS);
+				notify("API key rejected. Check plugin settings.");
 				return;
 			}
 			services.recordApiFailure();
@@ -235,12 +235,10 @@ export async function runFootnotes(
 		await saveEmbeddingCache(app, file.path, cached);
 
 		if (proposedNames.length === 1) {
-			new Notice(
-				`Second Thoughts: ${file.basename} → [[${proposedNames[0]}]]`
-			);
+			notify(`${file.basename} → [[${proposedNames[0]}]]`);
 		} else {
-			new Notice(
-				`Second Thoughts: Added ${proposedNames.length} connections to ${file.basename}`
+			notify(
+				`Added ${proposedNames.length} connections to ${file.basename}`
 			);
 		}
 	}

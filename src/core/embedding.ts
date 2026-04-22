@@ -1,5 +1,6 @@
 import { TFile, CachedMetadata, App } from "obsidian";
 import { LLMProvider } from "./llm";
+import { EMBEDDING_CONTENT_MAX_CHARS } from "./constants";
 
 export interface EmbeddingCache {
 	mtime: number;
@@ -62,7 +63,7 @@ export function extractCompartments(
 		title,
 		tags: tagSet.join(", "),
 		links: linkSet.join(", "),
-		content: content.substring(0, 30000),
+		content: content.substring(0, EMBEDDING_CONTENT_MAX_CHARS),
 	};
 }
 

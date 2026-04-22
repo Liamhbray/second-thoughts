@@ -1,4 +1,5 @@
-import { TFile, MarkdownView, Notice, App } from "obsidian";
+import { TFile, MarkdownView, App } from "obsidian";
+import { notify } from "./notify";
 
 interface CalloutRange {
 	from: number;
@@ -73,7 +74,7 @@ export async function handleAccept(
 		});
 	} catch (e) {
 		console.error("Second Thoughts: accept failed", e);
-		new Notice("Second Thoughts: could not accept proposal.");
+		notify("could not accept proposal.");
 	}
 }
 
@@ -98,7 +99,7 @@ export async function handleReject(
 		});
 	} catch (e) {
 		console.error("Second Thoughts: reject failed", e);
-		new Notice("Second Thoughts: could not reject proposal.");
+		notify("could not reject proposal.");
 	}
 }
 
@@ -126,6 +127,6 @@ export async function handleRejectAll(
 		});
 	} catch (e) {
 		console.error("Second Thoughts: reject-all failed", e);
-		new Notice("Second Thoughts: could not reject proposals.");
+		notify("could not reject proposals.");
 	}
 }

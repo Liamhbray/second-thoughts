@@ -1,4 +1,5 @@
 import { LLMProvider } from "../../core/llm";
+import { FOOTNOTE_REASON_MAX_CHARS } from "../../core/constants";
 import { App, TFile } from "obsidian";
 
 export interface FootnoteProposal {
@@ -58,6 +59,6 @@ export async function generateFootnoteReason(
 			.replace(/[*_`]/g, "")
 			.replace(/\s{2,}/g, " ")
 			.trim()
-			.substring(0, 200),
+			.substring(0, FOOTNOTE_REASON_MAX_CHARS),
 	};
 }
