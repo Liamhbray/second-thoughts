@@ -196,6 +196,7 @@ export default class SecondThoughtsPlugin extends Plugin {
 				embedNote: (file) => this.embedNote(file),
 				recordApiSuccess: () => this.recordApiSuccess(),
 				recordApiFailure: () => this.recordApiFailure(),
+				recordRateLimitHit: () => this.recordRateLimitHit(),
 				pauseApi: (ms) => this.pauseApi(ms),
 			});
 			this.lastBootstrapKey = key;

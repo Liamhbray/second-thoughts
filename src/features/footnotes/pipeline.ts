@@ -10,6 +10,8 @@ import { LLMError } from "../../core/llm";
 import { nextFootnoteId, formatFootnote } from "./format";
 import { generateFootnoteReason, FootnoteProposal } from "./prompts";
 
+const isolatedNoticeShown = new Set<string>();
+
 /**
  * Run the footnote pipeline for an idle note.
  * Generates footnotes for all candidates above the confidence threshold.
@@ -34,11 +36,12 @@ export async function runFootnotes(
 	if (candidates.size === 0) {
 		const resolved = app.metadataCache.resolvedLinks[file.path];
 		const hasLinks = resolved && Object.keys(resolved).length > 0;
-		if (!hasLinks) {
+		if (!hasLinks && !isolatedNoticeShown.has(file.path)) {
+			isolatedNoticeShown.add(file.path);
 			new Notice(
 				`Second Thoughts: ${file.basename} has no links — add [[wiki-links]] to enable connections.`
 			);
-		} else {
+		} else if (hasLinks) {
 			console.log(
 				`Second Thoughts: no candidates for ${file.path}`
 			);

@@ -15,6 +15,7 @@ export interface BootstrapDeps {
 	embedNote: (file: TFile) => Promise<void>;
 	recordApiSuccess: () => void;
 	recordApiFailure: () => void;
+	recordRateLimitHit: () => void;
 	pauseApi: (ms: number) => void;
 }
 
@@ -104,7 +105,11 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 					);
 					break outer;
 				}
-				deps.recordApiFailure();
+				if (e instanceof LLMError && e.kind === "rate_limit") {
+					deps.recordRateLimitHit();
+				} else {
+					deps.recordApiFailure();
+				}
 				if (
 					e instanceof LLMError &&
 					(e.kind === "rate_limit" || e.kind === "network")
@@ -125,7 +130,10 @@ export async function runBootstrap(deps: BootstrapDeps): Promise<void> {
 	}
 
 	if (total > 0) {
-		new Notice(`Second Thoughts: Indexing complete (${total} notes)`);
+		const msg = embedded === total
+			? `Second Thoughts: Indexing complete (${embedded} notes)`
+			: `Second Thoughts: Indexed ${embedded}/${total} notes (some failed)`;
+		new Notice(msg);
 	}
 
 	console.log(

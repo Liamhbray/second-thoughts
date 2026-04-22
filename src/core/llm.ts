@@ -44,12 +44,7 @@ export class OpenAIProvider implements LLMProvider {
 			}
 		);
 
-		let json: any;
-		try {
-			json = response.json;
-		} catch {
-			throw new LLMError("server", "Invalid JSON response from OpenAI");
-		}
+		const json = response.json;
 		if (!json?.choices?.length) return null;
 		return json.choices[0]?.message?.content?.trim() || null;
 	}
@@ -68,12 +63,7 @@ export class OpenAIProvider implements LLMProvider {
 			}
 		);
 
-		let json: any;
-		try {
-			json = response.json;
-		} catch {
-			throw new LLMError("server", "Invalid JSON response from OpenAI");
-		}
+		const json = response.json;
 		if (!json?.data?.length) {
 			throw new LLMError("unknown", "Embedding API returned no data");
 		}
