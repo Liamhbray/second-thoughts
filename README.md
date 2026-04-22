@@ -113,14 +113,27 @@ The store updates incrementally. When a note changes and goes idle, only that no
 
 ## Installation
 
-> This plugin is not yet in the Obsidian Community Plugin directory. Install manually using the steps below.
+> This plugin is not yet in the Obsidian Community Plugin directory. Install with BRAT (recommended) or manually.
 
 ### Requirements
 
 - [Obsidian](https://obsidian.md/) 1.12.0 or later (desktop only)
 - An [OpenAI API key](https://platform.openai.com/api-keys) (used for embeddings and LLM generation)
 
-### Steps
+### Install via BRAT (recommended)
+
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) handles installation and automatic updates.
+
+1. Install **BRAT** from **Settings > Community Plugins**
+2. Open the command palette (`Cmd/Ctrl+P`) and run **BRAT: Add a beta plugin for testing**
+3. Enter `Liamhbray/second-thoughts` and click **Add Plugin**
+4. Go to **Settings > Community Plugins**, refresh the list, and enable **Second Thoughts**
+5. Go to **Settings > Second Thoughts** and enter your OpenAI API key
+6. Start writing — footnotes will appear automatically after your notes go idle
+
+BRAT will notify you when updates are available.
+
+### Manual Install
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/Liamhbray/second-thoughts/releases/latest)
 2. In your vault, navigate to `.obsidian/plugins/` and create a folder called `second-thoughts`
@@ -132,7 +145,7 @@ The store updates incrementally. When a note changes and goes idle, only that no
 8. Start writing — footnotes will appear automatically after your notes go idle
 
 <details>
-<summary><strong>Updating</strong></summary>
+<summary><strong>Updating (manual installs only)</strong></summary>
 
 To update, download the latest `main.js`, `manifest.json`, and `styles.css` from the [releases page](https://github.com/Liamhbray/second-thoughts/releases) and replace the files in `.obsidian/plugins/second-thoughts/`. Restart Obsidian or reload the plugin.
 

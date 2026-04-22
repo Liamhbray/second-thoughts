@@ -57,3 +57,5 @@ git push --follow-tags
 ```
 
 The GitHub Actions workflow builds, tests, and creates a release with `main.js`, `manifest.json`, and `styles.css` attached.
+
+Tags are created **without** a `v` prefix (configured in `.npmrc`) so the tag, release name, and `manifest.json` version all match — this is required for [BRAT](https://github.com/TfTHacker/obsidian42-brat) compatibility.
