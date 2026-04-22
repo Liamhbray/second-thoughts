@@ -16,5 +16,6 @@ export const IDEATION_DIVERSE_K = 5;
 export const IDEATION_LAMBDA = 0.5;
 
 export const FOOTNOTE_REASON_MAX_CHARS = 200;
+export const FOOTNOTE_PROMPT_BODY_MAX_CHARS = 1500;
 
 export const MISSING_KEY_NOTICE_DURATION = 8000;
