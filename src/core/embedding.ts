@@ -29,40 +29,24 @@ export function extractCompartments(
 ): Compartments {
 	const title = file.basename;
 
-	const tagSet: string[] = [];
-	if (cache?.tags) {
-		for (const t of cache.tags) {
-			tagSet.push(t.tag);
-		}
-	}
-	if (cache?.frontmatter?.tags) {
-		const fmTags = cache.frontmatter.tags;
-		if (Array.isArray(fmTags)) {
-			for (const t of fmTags) {
-				tagSet.push(String(t));
-			}
-		}
-	}
+	const tags = [
+		...(cache?.tags?.map((t) => t.tag) ?? []),
+		...(Array.isArray(cache?.frontmatter?.tags)
+			? cache.frontmatter.tags.map(String)
+			: []),
+	];
 
-	const linkSet: string[] = [];
-	if (cache?.links) {
-		for (const l of cache.links) {
-			const display = l.displayText || l.link;
-			if (!l.link.startsWith("#")) {
-				linkSet.push(display);
-			}
-		}
-	}
-	if (cache?.frontmatterLinks) {
-		for (const l of cache.frontmatterLinks) {
-			linkSet.push(l.displayText || l.link);
-		}
-	}
+	const links = [
+		...(cache?.links
+			?.filter((l) => !l.link.startsWith("#"))
+			.map((l) => l.displayText || l.link) ?? []),
+		...(cache?.frontmatterLinks?.map((l) => l.displayText || l.link) ?? []),
+	];
 
 	return {
 		title,
-		tags: tagSet.join(", "),
-		links: linkSet.join(", "),
+		tags: tags.join(", "),
+		links: links.join(", "),
 		content: content.substring(0, EMBEDDING_CONTENT_MAX_CHARS),
 	};
 }
