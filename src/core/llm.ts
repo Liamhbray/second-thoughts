@@ -44,7 +44,12 @@ export class OpenAIProvider implements LLMProvider {
 			}
 		);
 
-		const json = response.json;
+		let json: any;
+		try {
+			json = response.json;
+		} catch {
+			throw new LLMError("server", "Invalid JSON response from OpenAI");
+		}
 		if (!json?.choices?.length) return null;
 		return json.choices[0]?.message?.content?.trim() || null;
 	}
@@ -63,7 +68,12 @@ export class OpenAIProvider implements LLMProvider {
 			}
 		);
 
-		const json = response.json;
+		let json: any;
+		try {
+			json = response.json;
+		} catch {
+			throw new LLMError("server", "Invalid JSON response from OpenAI");
+		}
 		if (!json?.data?.length) {
 			throw new LLMError("unknown", "Embedding API returned no data");
 		}
@@ -74,6 +84,38 @@ export class OpenAIProvider implements LLMProvider {
 	}
 
 	private async post(
+		url: string,
+		body: unknown
+	): Promise<RequestUrlResponse> {
+		const MAX_ATTEMPTS = 3;
+		const RETRYABLE: Set<LLMErrorKind> = new Set(["network", "server"]);
+		let lastError: LLMError | undefined;
+
+		for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+			try {
+				return await this.postOnce(url, body);
+			} catch (e) {
+				if (e instanceof LLMError && RETRYABLE.has(e.kind) && attempt < MAX_ATTEMPTS - 1) {
+					lastError = e;
+					const baseMs = 1000 * Math.pow(2, attempt); // 1s, 2s
+					const jitter = Math.random() * 200;
+					await this.sleep(baseMs + jitter);
+					continue;
+				}
+				throw e;
+			}
+		}
+
+		// Unreachable in practice, but satisfies the compiler
+		throw lastError!;
+	}
+
+	/** Visible for testing — override in tests to avoid real delays. */
+	protected sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	private async postOnce(
 		url: string,
 		body: unknown
 	): Promise<RequestUrlResponse> {
